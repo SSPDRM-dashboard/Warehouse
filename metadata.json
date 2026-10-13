@@ -1,0 +1,6 @@
+{
+  "name": "Warehouse OS - Inventory Control Centre",
+  "description": "Professional warehouse inventory dashboard, stock receiving, production material issuing, inventory balances, transaction history, and AI-powered stock forecasting.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

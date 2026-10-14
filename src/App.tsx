@@ -24,10 +24,12 @@ import {
   EyeOff,
   ShieldCheck,
   Edit2,
-  Trash2
+  Trash2,
+  Share2
 } from "lucide-react";
 import { Item, Balance, Transaction, Role, Page, UserAccount } from "./types";
 import { seedItems, initialBalances, initialTransactions } from "./mockData";
+import { SyncBackupModal } from "./SyncBackupModal";
 
 export const defaultUsers: UserAccount[] = [
   { id: "usr_1", username: "admin", password: "password123", name: "System Administrator", role: "Admin" },
@@ -106,6 +108,21 @@ export default function App() {
 
   const [role, setRole] = useState<Role>("Admin");
   const [page, setPage] = useState<Page>("dashboard");
+  const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+
+  const handleRestoreData = (data: {
+    items: Item[];
+    balances: Balance[];
+    transactions: Transaction[];
+    users?: UserAccount[];
+  }) => {
+    setItems(data.items);
+    setBalances(data.balances);
+    setTransactions(data.transactions);
+    if (data.users && data.users.length > 0) {
+      setUsers(data.users);
+    }
+  };
 
   // Save to localStorage whenever state changes
   useEffect(() => {
@@ -247,14 +264,20 @@ export default function App() {
           )}
         </nav>
 
-        <div className="mt-auto border border-[#304a65] rounded-xl p-3 text-xs text-[#c3d0de]">
+        <div className="mt-auto border border-[#304a65] rounded-xl p-3 text-xs text-[#c3d0de] space-y-2">
           <div className="flex items-center gap-2 mb-1">
             <span className="w-2 h-2 rounded-full bg-[#2a9d68]"></span>
-            <b className="text-white">Secure Local Mode</b>
+            <b className="text-white">Active Warehouse</b>
           </div>
           <p className="text-[11px] leading-relaxed text-[#9fb3c8]">
-            Inventory records persist securely in this browser session.
+            Records stored securely in browser. Sync across Vercel or backup anytime.
           </p>
+          <button
+            onClick={() => setIsSyncModalOpen(true)}
+            className="w-full py-1.5 px-2 bg-[#203c5b] hover:bg-[#2b4e75] text-[#dceaff] rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1.5 transition"
+          >
+            <RefreshCw size={12} /> Sync / Export Data
+          </button>
         </div>
       </aside>
 
@@ -277,17 +300,28 @@ export default function App() {
             </p>
           </div>
 
-          <div className="flex items-center gap-2 text-xs text-[#65768a]">
-            <span className="font-semibold">VIEW AS</span>
-            <select
-              value={role}
-              onChange={(e) => setRole(e.target.value as Role)}
-              className="border border-[#cfd9e4] rounded-lg px-3 py-1.5 bg-white text-[#18324d] font-medium focus:outline-none focus:ring-2 focus:ring-[#2463a6]"
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setIsSyncModalOpen(true)}
+              className="flex items-center gap-2 px-3 py-1.5 bg-[#f0f5fc] hover:bg-[#e1edfc] text-[#2463a6] border border-[#cfd9e4] rounded-lg text-xs font-semibold transition"
+              title="Sync warehouse records between Google Studio, Vercel, or backup to file"
             >
-              <option value="Admin">Administrator</option>
-              <option value="Manager">Warehouse Manager</option>
-              <option value="User">Warehouse User</option>
-            </select>
+              <RefreshCw size={14} />
+              <span>Sync / Backup</span>
+            </button>
+
+            <div className="flex items-center gap-2 text-xs text-[#65768a]">
+              <span className="font-semibold">VIEW AS</span>
+              <select
+                value={role}
+                onChange={(e) => setRole(e.target.value as Role)}
+                className="border border-[#cfd9e4] rounded-lg px-3 py-1.5 bg-white text-[#18324d] font-medium focus:outline-none focus:ring-2 focus:ring-[#2463a6]"
+              >
+                <option value="Admin">Administrator</option>
+                <option value="Manager">Warehouse Manager</option>
+                <option value="User">Warehouse User</option>
+              </select>
+            </div>
           </div>
         </header>
 
@@ -298,6 +332,8 @@ export default function App() {
               balances={balances}
               transactions={transactions}
               setPage={setPage}
+              onOpenSyncModal={() => setIsSyncModalOpen(true)}
+              onRestoreData={handleRestoreData}
             />
           )}
           {page === "items" && (
@@ -369,6 +405,16 @@ export default function App() {
           )}
         </div>
       </main>
+
+      <SyncBackupModal
+        isOpen={isSyncModalOpen}
+        onClose={() => setIsSyncModalOpen(false)}
+        items={items}
+        balances={balances}
+        transactions={transactions}
+        users={users}
+        onRestoreData={handleRestoreData}
+      />
     </div>
   );
 }
@@ -407,11 +453,15 @@ function DashboardView({
   balances,
   transactions,
   setPage,
+  onOpenSyncModal,
+  onRestoreData,
 }: {
   items: Item[];
   balances: Balance[];
   transactions: Transaction[];
   setPage: (p: Page) => void;
+  onOpenSyncModal: () => void;
+  onRestoreData: (data: { items: Item[]; balances: Balance[]; transactions: Transaction[]; users?: UserAccount[] }) => void;
 }) {
   const activeItems = items.filter((i) => i.active);
   const totalUnits = balances.reduce((s, b) => s + b.qty, 0);
@@ -434,6 +484,12 @@ function DashboardView({
         </div>
         <div className="flex items-center gap-2">
           <button
+            onClick={onOpenSyncModal}
+            className="flex items-center gap-2 px-3.5 py-2 bg-white border border-[#cfd9e4] text-[#18324d] rounded-xl text-xs font-semibold shadow-xs hover:bg-gray-50 transition"
+          >
+            <RefreshCw size={14} className="text-[#2463a6]" /> Sync / Backup
+          </button>
+          <button
             onClick={() => setPage("ai_forecast")}
             className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-indigo-600 to-blue-600 text-white rounded-xl text-xs font-semibold shadow-sm hover:opacity-95 transition"
           >
@@ -441,6 +497,40 @@ function DashboardView({
           </button>
         </div>
       </div>
+
+      {/* Empty State Banner (e.g. When first opened on Vercel) */}
+      {items.length === 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 text-amber-900 space-y-3 shadow-xs">
+          <div className="flex items-center gap-2 font-bold text-sm text-amber-950">
+            <AlertTriangle size={18} className="text-amber-600" />
+            <span>Warehouse Database is Empty in this Browser Environment</span>
+          </div>
+          <p className="text-xs text-amber-800 leading-relaxed">
+            Because web browsers isolate local storage by domain, data saved in Google Studio does not automatically appear on Vercel until synchronized. You can sync in 1 click or load the standard demo catalog.
+          </p>
+          <div className="flex flex-wrap items-center gap-2.5 pt-1">
+            <button
+              onClick={onOpenSyncModal}
+              className="px-4 py-2 bg-[#2463a6] text-white rounded-xl text-xs font-bold hover:opacity-95 transition flex items-center gap-1.5 shadow-xs"
+            >
+              <RefreshCw size={13} /> Sync Data from Google Studio
+            </button>
+            <button
+              onClick={() => {
+                onRestoreData({
+                  items: seedItems,
+                  balances: initialBalances,
+                  transactions: initialTransactions,
+                  users: defaultUsers,
+                });
+              }}
+              className="px-4 py-2 bg-white border border-amber-300 text-amber-900 rounded-xl text-xs font-semibold hover:bg-amber-100 transition flex items-center gap-1.5"
+            >
+              <Database size={13} /> Load Sample Automotive Parts
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Mobile Handphone Quick Stock Update Console */}
       <div className="bg-gradient-to-r from-[#10243b] to-[#203c5b] text-white rounded-2xl p-5 shadow-sm space-y-3">

@@ -2,6 +2,7 @@
   "name": "warehouse-os",
   "private": true,
   "version": "1.0.0",
+  "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build && tsc --noEmit",

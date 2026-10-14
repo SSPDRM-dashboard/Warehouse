@@ -25,11 +25,14 @@ import {
   ShieldCheck,
   Edit2,
   Trash2,
-  Share2
+  Share2,
+  FileSpreadsheet,
+  PackageOpen
 } from "lucide-react";
 import { Item, Balance, Transaction, Role, Page, UserAccount } from "./types";
 import { seedItems, initialBalances, initialTransactions } from "./mockData";
 import { SyncBackupModal } from "./SyncBackupModal";
+import { DailyReportsView } from "./DailyReportsView";
 
 export const defaultUsers: UserAccount[] = [
   { id: "usr_1", username: "admin", password: "password123", name: "System Administrator", role: "Admin" },
@@ -225,6 +228,12 @@ export default function App() {
             label="Stock Receiving"
           />
           <SidebarButton
+            active={page === "unpack"}
+            onClick={() => setPage("unpack")}
+            icon={<PackageOpen size={18} />}
+            label="Sent to Unpack"
+          />
+          <SidebarButton
             active={page === "issue"}
             onClick={() => setPage("issue")}
             icon={<ArrowUpRight size={18} />}
@@ -247,6 +256,12 @@ export default function App() {
             onClick={() => setPage("history")}
             icon={<History size={18} />}
             label="Transactions"
+          />
+          <SidebarButton
+            active={page === "reports"}
+            onClick={() => setPage("reports")}
+            icon={<FileSpreadsheet size={18} />}
+            label="Daily Reports"
           />
           <SidebarButton
             active={page === "ai_forecast"}
@@ -289,9 +304,11 @@ export default function App() {
               {page === "dashboard" && "Dashboard Overview"}
               {page === "items" && (canManage ? "Admin Item Master Setup" : "Item Catalogue Lookup")}
               {page === "receiving" && "Stock Receiving & Inbound"}
+              {page === "unpack" && "Sent to Unpack & Decant Station"}
               {page === "issue" && "Send Parts to Production"}
               {page === "inventory" && "Warehouse Inventory Balance"}
               {page === "history" && "Transaction History & Audit Log"}
+              {page === "reports" && "Daily Warehouse Reports (Incoming, Unpacking & Production 1)"}
               {page === "ai_forecast" && "AI Stock Intelligence & Reorder Forecasting"}
               {page === "settings" && "User Accounts & Security Settings"}
             </h2>
@@ -356,6 +373,15 @@ export default function App() {
               allLocs={allLocs}
               stock={stock}
               role={role}
+              setPage={setPage}
+            />
+          )}
+          {page === "unpack" && (
+            <UnpackingView
+              transactions={transactions}
+              setTransactions={setTransactions}
+              role={role}
+              items={items}
             />
           )}
           {page === "issue" && (
@@ -368,6 +394,7 @@ export default function App() {
               allLocs={allLocs}
               stock={stock}
               role={role}
+              setPage={setPage}
             />
           )}
           {page === "return" && (
@@ -391,6 +418,14 @@ export default function App() {
               setTransactions={setTransactions}
               items={items}
               canManage={canManage}
+              setPage={setPage}
+            />
+          )}
+          {page === "reports" && (
+            <DailyReportsView
+              transactions={transactions}
+              items={items}
+              balances={balances}
             />
           )}
           {page === "ai_forecast" && (
@@ -483,6 +518,12 @@ function DashboardView({
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setPage("reports")}
+            className="flex items-center gap-2 px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-semibold shadow-xs transition"
+          >
+            <FileSpreadsheet size={14} className="text-emerald-700" /> Daily Reports
+          </button>
           <button
             onClick={onOpenSyncModal}
             className="flex items-center gap-2 px-3.5 py-2 bg-white border border-[#cfd9e4] text-[#18324d] rounded-xl text-xs font-semibold shadow-xs hover:bg-gray-50 transition"
@@ -642,6 +683,21 @@ function DashboardView({
               <div>
                 <div>Item Master</div>
                 <div className="text-xs font-normal text-[#65768a]">Manage part nos & specs</div>
+              </div>
+            </button>
+            <button
+              onClick={() => setPage("reports")}
+              className="flex items-center gap-3 p-4 bg-emerald-50/50 hover:bg-emerald-100/50 border border-emerald-200 rounded-xl text-left font-semibold text-sm text-[#18324d] transition sm:col-span-2"
+            >
+              <FileSpreadsheet className="text-emerald-700 shrink-0" size={20} />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between">
+                  <div className="font-bold text-[#18324d]">Daily Warehouse Reports</div>
+                  <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-full">3 Reports</span>
+                </div>
+                <div className="text-xs font-normal text-[#65768a] truncate">
+                  Download daily reports for Incoming, Unpacking & Production 1
+                </div>
               </div>
             </button>
           </div>
@@ -1226,6 +1282,384 @@ function ItemModal({
 }
 
 /* -------------------------------------------------------------------------- */
+/* UNPACKING VIEW (Sent to Unpack & Decant Station)                           */
+/* -------------------------------------------------------------------------- */
+function UnpackingView({
+  transactions,
+  setTransactions,
+  role,
+  items,
+}: {
+  transactions: Transaction[];
+  setTransactions: React.Dispatch<React.SetStateAction<Transaction[]>>;
+  role: Role;
+  items: Item[];
+}) {
+  const [unpackerName, setUnpackerName] = useState(
+    role === "Admin" ? "System Administrator" : "Floor Operator (WH001)"
+  );
+  const [selectedTxId, setSelectedTxId] = useState("");
+  const [codeQuery, setCodeQuery] = useState("");
+  const [batchNo, setBatchNo] = useState("");
+  const [qty, setQty] = useState<number | "">("");
+  const [loc, setLoc] = useState("");
+  const [remarks, setRemarks] = useState("");
+  const [notice, setNotice] = useState<{ msg: string; type: "success" | "error" } | null>(null);
+
+  const receivingTxs = transactions.filter((t) => t.type === "Receiving");
+  const pendingTxs = receivingTxs.filter((t) => !t.unpacked);
+
+  const matchedItem = items.find(
+    (i) => i.active && i.code.toLowerCase() === codeQuery.trim().toLowerCase()
+  );
+
+  const handleSelectTx = (txId: string) => {
+    setSelectedTxId(txId);
+    if (!txId) {
+      setCodeQuery("");
+      setBatchNo("");
+      setQty("");
+      setLoc("");
+      setRemarks("");
+      return;
+    }
+    const found = receivingTxs.find((t) => t.id === txId);
+    if (found) {
+      setCodeQuery(found.code);
+      setBatchNo(found.batchNo || "");
+      setQty(found.qty);
+      setLoc(found.dest);
+      setRemarks(found.ref || "");
+    }
+  };
+
+  const handleFormUnpack = (e: React.FormEvent) => {
+    e.preventDefault();
+    setNotice(null);
+    if (!selectedTxId && !codeQuery) {
+      setNotice({ msg: "Please select a pending receipt or enter Part No to unpack.", type: "error" });
+      return;
+    }
+    if (!unpackerName.trim()) {
+      setNotice({ msg: "Please enter the Unpacker / Operator name.", type: "error" });
+      return;
+    }
+
+    let targetTxId = selectedTxId;
+    if (!targetTxId && codeQuery) {
+      const matchPending = pendingTxs.find(
+        (t) => t.code.toLowerCase() === codeQuery.trim().toLowerCase() && (!batchNo || t.batchNo === batchNo)
+      );
+      if (matchPending) {
+        targetTxId = matchPending.id;
+      } else {
+        const anyPending = pendingTxs.find((t) => t.code.toLowerCase() === codeQuery.trim().toLowerCase());
+        if (anyPending) {
+          targetTxId = anyPending.id;
+        }
+      }
+    }
+
+    if (!targetTxId) {
+      setNotice({ msg: "No matching pending receiving transaction found to unpack.", type: "error" });
+      return;
+    }
+
+    setTransactions(
+      transactions.map((t) => {
+        if (t.id === targetTxId) {
+          return {
+            ...t,
+            unpacked: true,
+            unpackedByName: unpackerName.trim(),
+            unpackDate: new Date().toISOString().slice(0, 10),
+            batchNo: batchNo.trim() || t.batchNo,
+            qty: qty !== "" ? Number(qty) : t.qty,
+            dest: loc.trim() || t.dest,
+            ref: remarks.trim() ? `${t.ref || ""} (Decant Note: ${remarks.trim()})` : t.ref,
+          };
+        }
+        return t;
+      })
+    );
+    setNotice({
+      msg: `Successfully unpacked and decanted shipment ${targetTxId}. Released for operation / production!`,
+      type: "success",
+    });
+    setSelectedTxId("");
+    setCodeQuery("");
+    setBatchNo("");
+    setQty("");
+    setLoc("");
+    setRemarks("");
+  };
+
+  const handleQuickUnpack = (txId: string) => {
+    handleSelectTx(txId);
+    if (!unpackerName.trim()) {
+      setNotice({ msg: "Please enter the Unpacker / Operator name.", type: "error" });
+      return;
+    }
+    setTransactions(
+      transactions.map((t) => {
+        if (t.id === txId) {
+          return {
+            ...t,
+            unpacked: true,
+            unpackedByName: unpackerName.trim(),
+            unpackDate: new Date().toISOString().slice(0, 10),
+          };
+        }
+        return t;
+      })
+    );
+    setNotice({
+      msg: `Successfully unpacked and decanted receipt ${txId}. Released for operation / production!`,
+      type: "success",
+    });
+  };
+
+  const pendingCount = pendingTxs.length;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+          <h2 className="text-2xl font-bold tracking-tight text-[#18324d]">
+            Sent to Unpack & Decant Station
+          </h2>
+          <p className="text-sm text-[#65768a]">
+            Process received shipments from receiving bay, verify part names and batch numbers, and unpack before releasing to operation/production.
+          </p>
+        </div>
+        <div className="bg-blue-50 border border-blue-200 px-4 py-2 rounded-xl text-xs text-blue-900 font-semibold flex items-center gap-2">
+          <PackageOpen size={16} className="text-[#2463a6]" />
+          <span>Pending Unpack: {pendingCount} shipments</span>
+        </div>
+      </div>
+
+      {notice && (
+        <div
+          className={`p-4 rounded-xl text-xs font-semibold ${
+            notice.type === "success"
+              ? "bg-emerald-50 text-emerald-900 border border-emerald-200"
+              : "bg-red-50 text-red-900 border border-red-200"
+          }`}
+        >
+          {notice.msg}
+        </div>
+      )}
+
+      {/* Unpacking Form & Settings Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-1 bg-white border border-[#dfe6ee] rounded-2xl p-6 shadow-xs">
+          <h3 className="text-base font-semibold text-[#18324d] mb-4 flex items-center gap-2">
+            <PackageOpen size={18} className="text-[#2463a6]" /> Unpack & Decant Form
+          </h3>
+
+          <form onSubmit={handleFormUnpack} className="space-y-4">
+            <div>
+              <label className="block text-xs font-semibold text-[#42566c] mb-1">
+                Select Pending Receipt (Optional Quick Fill)
+              </label>
+              <select
+                value={selectedTxId}
+                onChange={(e) => handleSelectTx(e.target.value)}
+                className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm bg-white font-mono"
+              >
+                <option value="">-- Choose pending receipt --</option>
+                {pendingTxs.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.id} - {t.code} (Batch: {t.batchNo || "N/A"} · Qty: {t.qty})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-[#42566c] mb-1">Enter Part No *</label>
+              <input
+                type="text"
+                list="activeItemsUnpack"
+                value={codeQuery}
+                onChange={(e) => setCodeQuery(e.target.value)}
+                required
+                placeholder="Enter part no..."
+                className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono bg-white"
+              />
+              <datalist id="activeItemsUnpack">
+                {items
+                  .filter((i) => i.active)
+                  .map((i) => (
+                    <option key={i.code} value={i.code}>
+                      {i.desc}
+                    </option>
+                  ))}
+              </datalist>
+            </div>
+
+            {codeQuery && matchedItem && (
+              <div className="p-3 bg-emerald-50/50 border border-emerald-200 rounded-xl text-xs space-y-1">
+                <div className="font-bold text-emerald-900">{matchedItem.desc}</div>
+                <div className="text-emerald-700 font-mono">
+                  {matchedItem.code} · {matchedItem.uom}
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-[#42566c] mb-1">Batch No / Lot No</label>
+                <input
+                  type="text"
+                  value={batchNo}
+                  onChange={(e) => setBatchNo(e.target.value)}
+                  placeholder="e.g. BATCH-2026"
+                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono bg-white"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-[#42566c] mb-1">Quantity</label>
+                <input
+                  type="number"
+                  min="0.001"
+                  step="any"
+                  value={qty}
+                  onChange={(e) => setQty(e.target.value === "" ? "" : Number(e.target.value))}
+                  placeholder="e.g. 50"
+                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono bg-white"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-[#42566c] mb-1">
+                  Unpacker / Operator Name *
+                </label>
+                <input
+                  type="text"
+                  value={unpackerName}
+                  onChange={(e) => setUnpackerName(e.target.value)}
+                  required
+                  placeholder="e.g. Ahmad Zaki"
+                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm bg-white"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-[#42566c] mb-1">
+                  Decant / Inspection Status
+                </label>
+                <input
+                  type="text"
+                  value={remarks}
+                  onChange={(e) => setRemarks(e.target.value)}
+                  placeholder="e.g. Inspected OK"
+                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm bg-white font-mono"
+                />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              className="w-full py-3 bg-[#2463a6] hover:bg-[#1d528a] text-white rounded-xl text-xs font-semibold shadow-xs transition flex items-center justify-center gap-1.5"
+            >
+              <PackageOpen size={14} /> ✓ Confirm & Post Unpack & Decant
+            </button>
+          </form>
+        </div>
+
+        {/* Inbound Queue Table */}
+        <div className="lg:col-span-2 bg-white border border-[#dfe6ee] rounded-2xl shadow-xs overflow-hidden flex flex-col">
+          <div className="p-4 border-b border-[#f0f4f8] bg-[#f8fafc] font-bold text-xs text-[#18324d] uppercase tracking-wider flex justify-between items-center">
+            <span>Inbound Shipments Queue ({receivingTxs.length})</span>
+            <span className="text-[11px] font-normal text-[#65768a]">Only unpacked items can be sent to production</span>
+          </div>
+          <div className="overflow-x-auto flex-1">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-[#f4f7fb] text-[#65768a] uppercase font-semibold border-b border-[#dfe6ee]">
+                <tr>
+                  <th className="p-3">Receive ID & Time</th>
+                  <th className="p-3">Part No & Part Name</th>
+                  <th className="p-3">Batch No</th>
+                  <th className="p-3">Qty Received</th>
+                  <th className="p-3">DO / Ref</th>
+                  <th className="p-3">Receiver</th>
+                  <th className="p-3">Unpack Status</th>
+                  <th className="p-3 text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#f0f4f8]">
+                {receivingTxs.map((t) => {
+                  const isUnpacked = t.unpacked === true;
+                  return (
+                    <tr key={t.id} className="hover:bg-blue-50/25 transition">
+                      <td className="p-3">
+                        <div className="font-bold text-[#18324d] font-mono">{t.id}</div>
+                        <div className="text-[11px] text-[#65768a]">{t.time}</div>
+                      </td>
+                      <td className="p-3">
+                        <div className="font-bold text-[#18324d] font-mono">{t.code}</div>
+                        <div className="text-[11px] text-[#42566c]">{t.partName || t.desc}</div>
+                      </td>
+                      <td className="p-3 font-mono">
+                        {t.batchNo ? (
+                          <span className="px-2 py-0.5 bg-blue-50 text-blue-800 rounded font-semibold border border-blue-200 text-[11px]">
+                            {t.batchNo}
+                          </span>
+                        ) : (
+                          <span className="text-[#a0aec0]">—</span>
+                        )}
+                      </td>
+                      <td className="p-3 font-mono font-bold text-emerald-700">+{t.qty.toLocaleString()}</td>
+                      <td className="p-3 font-mono text-[#65768a]">{t.ref}</td>
+                      <td className="p-3 text-[#42566c]">{t.receiverName || t.user}</td>
+                      <td className="p-3">
+                        {isUnpacked ? (
+                          <div className="space-y-0.5">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                              ✓ Unpacked & Decanted
+                            </span>
+                            <div className="text-[10px] text-[#65768a]">By {t.unpackedByName || "Operator"}</div>
+                          </div>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200 animate-pulse">
+                            ⏳ Pending Unpack
+                          </span>
+                        )}
+                      </td>
+                      <td className="p-3 text-right">
+                        {!isUnpacked ? (
+                          <button
+                            onClick={() => handleQuickUnpack(t.id)}
+                            className="px-3 py-1.5 bg-[#2463a6] hover:bg-[#1d528a] text-white rounded-xl text-xs font-semibold shadow-xs transition flex items-center gap-1.5 ml-auto"
+                          >
+                            <PackageOpen size={13} /> Unpack & Decant
+                          </button>
+                        ) : (
+                          <span className="text-xs text-emerald-700 font-semibold">Ready for Operation</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {receivingTxs.length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="p-8 text-center text-[#65768a]">
+                      No receiving transactions found. Please record stock receiving first.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /* STOCK RECEIVING VIEW                                                       */
 /* -------------------------------------------------------------------------- */
 function ReceivingView({
@@ -1237,6 +1671,7 @@ function ReceivingView({
   allLocs,
   stock,
   role,
+  setPage,
 }: {
   items: Item[];
   balances: Balance[];
@@ -1246,11 +1681,16 @@ function ReceivingView({
   allLocs: () => string[];
   stock: (code: string) => number;
   role: Role;
+  setPage?: (p: Page) => void;
 }) {
   const [codeQuery, setCodeQuery] = useState("");
   const [qty, setQty] = useState<number | "">("");
   const [loc, setLoc] = useState("A-01-01");
   const [ref, setRef] = useState("");
+  const [batchNo, setBatchNo] = useState("");
+  const [receiverName, setReceiverName] = useState(
+    role === "Admin" ? "System Administrator" : role === "Manager" ? "Warehouse Manager" : "Floor Operator (WH001)"
+  );
   const [notice, setNotice] = useState<{ msg: string; type: "success" | "error" } | null>(null);
 
   const matchedItem = items.find(
@@ -1272,25 +1712,31 @@ function ReceivingView({
     const finalLoc = loc.trim() || "A-01-01";
     const id = txNo("RCV");
     setBalances(upsertBalance(balances, matchedItem.code, finalLoc, qNum));
+    const finalReceiver = receiverName.trim() || (role === "Admin" ? "System Administrator" : "Floor Operator");
     const newTx: Transaction = {
       id,
       type: "Receiving",
       code: matchedItem.code,
+      partName: matchedItem.desc,
       desc: matchedItem.desc,
+      batchNo: batchNo.trim() || undefined,
       qty: qNum,
       source: "Supplier",
       dest: finalLoc,
       ref: ref.trim() || "—",
       user: role === "Admin" ? "ADMIN-DEMO" : role === "Manager" ? "MGR-DEMO" : "WH001",
+      receiverName: finalReceiver,
+      unpacked: false,
       time: new Date().toLocaleString(),
       status: "Posted",
     };
     setTransactions([newTx, ...transactions]);
     setNotice({
-      msg: `Successfully posted receipt ${id}. Total stock for ${matchedItem.code}: ${stock(matchedItem.code) + qNum} ${matchedItem.uom}.`,
+      msg: `Successfully posted receipt ${id} by ${finalReceiver} (Batch: ${batchNo || "N/A"}). Total stock for ${matchedItem.code}: ${stock(matchedItem.code) + qNum} ${matchedItem.uom}.`,
       type: "success",
     });
     setCodeQuery("");
+    setBatchNo("");
     setQty("");
     setRef("");
   };
@@ -1300,11 +1746,21 @@ function ReceivingView({
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h2 className="text-2xl font-bold text-[#18324d]">Stock Receiving</h2>
-          <p className="text-sm text-[#65768a]">Record inbound supplier shipments into designated warehouse locations.</p>
+          <p className="text-sm text-[#65768a]">Record inbound supplier shipments with receiver names into designated warehouse locations.</p>
         </div>
-        <span className="px-3 py-1 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-full text-xs font-bold">
-          Inbound movement
-        </span>
+        <div className="flex items-center gap-2">
+          {setPage && (
+            <button
+              onClick={() => setPage("reports")}
+              className="flex items-center gap-2 px-3 py-1.5 bg-white border border-[#cfd9e4] text-[#18324d] rounded-xl text-xs font-semibold hover:bg-gray-50 transition shadow-xs"
+            >
+              <FileSpreadsheet size={14} className="text-emerald-700" /> Daily Incoming Report
+            </button>
+          )}
+          <span className="px-3 py-1 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-full text-xs font-bold">
+            Inbound movement
+          </span>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -1349,10 +1805,35 @@ function ReceivingView({
             {codeQuery && (
               <div>
                 {matchedItem ? (
-                  <div className="p-3 bg-emerald-50/50 border border-emerald-200 rounded-xl text-xs space-y-1">
-                    <div className="font-bold text-emerald-900">{matchedItem.desc}</div>
-                    <div className="text-emerald-700 font-mono">
-                      {matchedItem.code} · {matchedItem.uom} · On Hand: {stock(matchedItem.code)}
+                  <div className="space-y-3">
+                    <div className="p-3 bg-emerald-50/50 border border-emerald-200 rounded-xl text-xs space-y-1">
+                      <div className="font-bold text-emerald-900">{matchedItem.desc}</div>
+                      <div className="text-emerald-700 font-mono">
+                        {matchedItem.code} · {matchedItem.uom} · On Hand: {stock(matchedItem.code)}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-[#42566c] mb-1">Part Name</label>
+                        <input
+                          type="text"
+                          readOnly
+                          value={matchedItem.desc}
+                          className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm bg-gray-50 text-[#18324d] font-medium"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-[#42566c] mb-1">Batch No / Lot No *</label>
+                        <input
+                          type="text"
+                          value={batchNo}
+                          onChange={(e) => setBatchNo(e.target.value)}
+                          required
+                          placeholder="e.g. BATCH-202610-01"
+                          className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono bg-white"
+                        />
+                      </div>
                     </div>
                   </div>
                 ) : (
@@ -1395,15 +1876,33 @@ function ReceivingView({
               </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-[#42566c] mb-1">Delivery Order / Supplier Reference</label>
-              <input
-                type="text"
-                value={ref}
-                onChange={(e) => setRef(e.target.value)}
-                placeholder="e.g. DO-8021"
-                className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono"
-              />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-[#42566c] mb-1">
+                  Receiver Name (Person In Charge) *
+                </label>
+                <input
+                  type="text"
+                  value={receiverName}
+                  onChange={(e) => setReceiverName(e.target.value)}
+                  required
+                  placeholder="e.g. Ahmad Zaki / Tan Wei Lun"
+                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm bg-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-[#42566c] mb-1">
+                  Delivery Order / Supplier Reference
+                </label>
+                <input
+                  type="text"
+                  value={ref}
+                  onChange={(e) => setRef(e.target.value)}
+                  placeholder="e.g. DO-8021"
+                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono"
+                />
+              </div>
             </div>
 
             <button
@@ -1459,6 +1958,7 @@ function IssueView({
   allLocs,
   stock,
   role,
+  setPage,
 }: {
   items: Item[];
   balances: Balance[];
@@ -1468,12 +1968,14 @@ function IssueView({
   allLocs: () => string[];
   stock: (code: string, loc?: string) => number;
   role: Role;
+  setPage?: (p: Page) => void;
 }) {
   const [codeQuery, setCodeQuery] = useState("");
   const [sourceLoc, setSourceLoc] = useState("A-01-01");
   const [qty, setQty] = useState<number | "">("");
   const [destLine, setDestLine] = useState("Production Line 1");
   const [ref, setRef] = useState("");
+  const [batchNo, setBatchNo] = useState("");
   const [userId, setUserId] = useState(role === "Admin" ? "ADMIN-DEMO" : role === "Manager" ? "MGR-DEMO" : "WH001");
   const [notice, setNotice] = useState<{ msg: string; type: "success" | "error" } | null>(null);
 
@@ -1539,27 +2041,49 @@ function IssueView({
       return;
     }
 
+    // Enforce: Only items unpacked can be sent to production
+    const matchedReceivingTxs = transactions.filter(
+      (t) =>
+        t.type === "Receiving" &&
+        t.code.trim().toUpperCase() === matchedItem.code.trim().toUpperCase() &&
+        (batchNo ? (t.batchNo && t.batchNo.trim().toLowerCase() === batchNo.trim().toLowerCase()) : true)
+    );
+    if (matchedReceivingTxs.length > 0) {
+      const isAnyUnpacked = matchedReceivingTxs.some((t) => t.unpacked === true);
+      if (!isAnyUnpacked) {
+        setNotice({
+          msg: `Error: Item "${matchedItem.code}" (Batch: ${batchNo || "N/A"}) is pending unpack at the Sent to Unpack station. Only items that have been unpacked and decanted can be sent to production!`,
+          type: "error",
+        });
+        return;
+      }
+    }
+
     const id = txNo("ISS");
     setBalances(upsertBalance(balances, matchedItem.code, targetLoc, -qNum));
     const newTx: Transaction = {
       id,
       type: "Production Issue",
       code: matchedItem.code,
+      partName: matchedItem.desc,
       desc: matchedItem.desc,
+      batchNo: batchNo.trim() || undefined,
       qty: qNum,
       source: targetLoc,
       dest: destLine,
       ref: ref.trim(),
       user: userId.trim(),
+      receiverName: destLine.includes("Line 1") ? "Production Line 1 Operator" : "Production Operator",
       time: new Date().toLocaleString(),
       status: "Posted",
     };
     setTransactions([newTx, ...transactions]);
     setNotice({
-      msg: `Production issue posted successfully. Transaction ${id}. Remaining stock at ${targetLoc}: ${currentLocStock - qNum} ${matchedItem.uom}.`,
+      msg: `Production issue posted successfully. Transaction ${id} (Batch: ${batchNo || "N/A"}). Remaining stock at ${targetLoc}: ${currentLocStock - qNum} ${matchedItem.uom}.`,
       type: "success",
     });
     setCodeQuery("");
+    setBatchNo("");
     setQty("");
     setRef("");
   };
@@ -1571,9 +2095,19 @@ function IssueView({
           <h2 className="text-2xl font-bold text-[#18324d]">Send Parts to Production</h2>
           <p className="text-sm text-[#65768a]">Issue material from storage locations to assembly and production lines.</p>
         </div>
-        <span className="px-3 py-1 bg-amber-50 text-amber-800 border border-amber-200 rounded-full text-xs font-bold">
-          Outbound movement
-        </span>
+        <div className="flex items-center gap-2">
+          {setPage && (
+            <button
+              onClick={() => setPage("reports")}
+              className="flex items-center gap-2 px-3 py-1.5 bg-white border border-[#cfd9e4] text-[#18324d] rounded-xl text-xs font-semibold hover:bg-gray-50 transition shadow-xs"
+            >
+              <FileSpreadsheet size={14} className="text-amber-700" /> Daily Sent to Production 1 Report
+            </button>
+          )}
+          <span className="px-3 py-1 bg-amber-50 text-amber-800 border border-amber-200 rounded-full text-xs font-bold">
+            Outbound movement
+          </span>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -1618,17 +2152,53 @@ function IssueView({
             {codeQuery && (
               <div>
                 {matchedItem ? (
-                  <div className="p-3 bg-emerald-50/50 border border-emerald-200 rounded-xl text-xs space-y-1">
-                    <div className="font-bold text-emerald-900">{matchedItem.desc}</div>
-                    <div className="text-emerald-700 font-mono">
-                      {matchedItem.code} · {matchedItem.uom} · Total In Stock: {stock(matchedItem.code)} {matchedItem.uom}
+                  <div className="space-y-3">
+                    <div className="p-3 bg-emerald-50/50 border border-emerald-200 rounded-xl text-xs space-y-1">
+                      <div className="font-bold text-emerald-900">{matchedItem.desc}</div>
+                      <div className="text-emerald-700 font-mono">
+                        {matchedItem.code} · {matchedItem.uom} · Total In Stock: {stock(matchedItem.code)} {matchedItem.uom}
+                      </div>
+                      <div className="text-[11px] text-[#2463a6] font-semibold pt-1">
+                        Storage Location Breakdown:{" "}
+                        {balances
+                          .filter((b) => b.code.trim().toUpperCase() === matchedItem.code.trim().toUpperCase() && b.qty > 0)
+                          .map((b) => `${b.loc} (${b.qty} ${matchedItem.uom})`)
+                          .join(", ") || "No stock in storage"}
+                      </div>
                     </div>
-                    <div className="text-[11px] text-[#2463a6] font-semibold pt-1">
-                      Storage Location Breakdown:{" "}
-                      {balances
-                        .filter((b) => b.code.trim().toUpperCase() === matchedItem.code.trim().toUpperCase() && b.qty > 0)
-                        .map((b) => `${b.loc} (${b.qty} ${matchedItem.uom})`)
-                        .join(", ") || "No stock in storage"}
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-[#42566c] mb-1">Part Name</label>
+                        <input
+                          type="text"
+                          readOnly
+                          value={matchedItem.desc}
+                          className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm bg-gray-50 text-[#18324d] font-medium"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-[#42566c] mb-1">Batch No / Lot No</label>
+                        <input
+                          type="text"
+                          list="issueBatchList"
+                          value={batchNo}
+                          onChange={(e) => setBatchNo(e.target.value)}
+                          placeholder="e.g. BATCH-202610-01"
+                          className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono bg-white"
+                        />
+                        <datalist id="issueBatchList">
+                          {Array.from(
+                            new Set(
+                              transactions
+                                .filter((t) => t.type === "Receiving" && t.code === matchedItem.code && t.unpacked && t.batchNo)
+                                .map((t) => t.batchNo as string)
+                            )
+                          ).map((b) => (
+                            <option key={b} value={b} />
+                          ))}
+                        </datalist>
+                      </div>
                     </div>
                   </div>
                 ) : (
@@ -1792,6 +2362,7 @@ function ReturnView({
   const [qty, setQty] = useState<number | "">("");
   const [destLoc, setDestLoc] = useState("A-01-01");
   const [ref, setRef] = useState("");
+  const [batchNo, setBatchNo] = useState("");
   const [userId, setUserId] = useState(role === "Admin" ? "ADMIN-DEMO" : role === "Manager" ? "MGR-DEMO" : "WH001");
   const [notice, setNotice] = useState<{ msg: string; type: "success" | "error" } | null>(null);
 
@@ -1823,7 +2394,9 @@ function ReturnView({
       id,
       type: "Stock Return",
       code: matchedItem.code,
+      partName: matchedItem.desc,
       desc: matchedItem.desc,
+      batchNo: batchNo.trim() || undefined,
       qty: qNum,
       source: sourceLine,
       dest: finalDest,
@@ -1834,10 +2407,11 @@ function ReturnView({
     };
     setTransactions([newTx, ...transactions]);
     setNotice({
-      msg: `Stock return posted successfully. Transaction ${id}. Updated stock for ${matchedItem.code}: ${stock(matchedItem.code) + qNum} ${matchedItem.uom}.`,
+      msg: `Stock return posted successfully. Transaction ${id} (Batch: ${batchNo || "N/A"}). Updated stock for ${matchedItem.code}: ${stock(matchedItem.code) + qNum} ${matchedItem.uom}.`,
       type: "success",
     });
     setCodeQuery("");
+    setBatchNo("");
     setQty("");
     setRef("");
   };
@@ -1896,10 +2470,46 @@ function ReturnView({
             {codeQuery && (
               <div>
                 {matchedItem ? (
-                  <div className="p-3 bg-emerald-50/50 border border-emerald-200 rounded-xl text-xs space-y-1">
-                    <div className="font-bold text-emerald-900">{matchedItem.desc}</div>
-                    <div className="text-emerald-700 font-mono">
-                      {matchedItem.code} · {matchedItem.uom} · Total On Hand: {stock(matchedItem.code)}
+                  <div className="space-y-3">
+                    <div className="p-3 bg-emerald-50/50 border border-emerald-200 rounded-xl text-xs space-y-1">
+                      <div className="font-bold text-emerald-900">{matchedItem.desc}</div>
+                      <div className="text-emerald-700 font-mono">
+                        {matchedItem.code} · {matchedItem.uom} · Total On Hand: {stock(matchedItem.code)}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-[#42566c] mb-1">Part Name</label>
+                        <input
+                          type="text"
+                          readOnly
+                          value={matchedItem.desc}
+                          className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm bg-gray-50 text-[#18324d] font-medium"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-[#42566c] mb-1">Batch No / Lot No</label>
+                        <input
+                          type="text"
+                          list="returnBatchList"
+                          value={batchNo}
+                          onChange={(e) => setBatchNo(e.target.value)}
+                          placeholder="e.g. BATCH-202610-01"
+                          className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono bg-white"
+                        />
+                        <datalist id="returnBatchList">
+                          {Array.from(
+                            new Set(
+                              transactions
+                                .filter((t) => t.code === matchedItem.code && t.batchNo)
+                                .map((t) => t.batchNo as string)
+                            )
+                          ).map((b) => (
+                            <option key={b} value={b} />
+                          ))}
+                        </datalist>
+                      </div>
                     </div>
                   </div>
                 ) : (
@@ -2129,11 +2739,13 @@ function HistoryView({
   setTransactions,
   items,
   canManage,
+  setPage,
 }: {
   transactions: Transaction[];
   setTransactions: React.Dispatch<React.SetStateAction<Transaction[]>>;
   items: Item[];
   canManage: boolean;
+  setPage?: (p: Page) => void;
 }) {
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("All types");
@@ -2159,9 +2771,12 @@ function HistoryView({
       t.id.toLowerCase().includes(q) ||
       t.type.toLowerCase().includes(q) ||
       t.code.toLowerCase().includes(q) ||
+      (t.partName && t.partName.toLowerCase().includes(q)) ||
       (t.desc && t.desc.toLowerCase().includes(q)) ||
+      (t.batchNo && t.batchNo.toLowerCase().includes(q)) ||
       (t.ref && t.ref.toLowerCase().includes(q)) ||
       (t.user && t.user.toLowerCase().includes(q)) ||
+      (t.receiverName && t.receiverName.toLowerCase().includes(q)) ||
       (t.source && t.source.toLowerCase().includes(q)) ||
       (t.dest && t.dest.toLowerCase().includes(q));
     return matchType && matchText;
@@ -2172,9 +2787,17 @@ function HistoryView({
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h2 className="text-2xl font-bold text-[#18324d]">Transaction History</h2>
-          <p className="text-sm text-[#65768a]">Complete audit trail of posted movements and controlled adjustments.</p>
+          <p className="text-sm text-[#65768a]">Complete audit trail of posted movements with Part Name and Batch No tracking.</p>
         </div>
         <div className="flex items-center gap-2">
+          {setPage && (
+            <button
+              onClick={() => setPage("reports")}
+              className="flex items-center gap-2 px-3 py-2 bg-[#2463a6] text-white rounded-xl text-xs font-semibold hover:opacity-95 shadow-xs transition"
+            >
+              <FileSpreadsheet size={14} /> Daily Reports
+            </button>
+          )}
           {canManage && transactions.length > 0 && (
             <button
               onClick={() => setClearConfirm(true)}
@@ -2187,8 +2810,8 @@ function HistoryView({
             onClick={() =>
               downloadCSV(
                 "warehouse_transactions.csv",
-                ["Transaction No", "Type", "Part No", "Description", "Quantity", "Source", "Destination", "Reference", "User", "Time", "Status"],
-                transactions.map((t) => [t.id, t.type, t.code, t.desc, t.qty, t.source, t.dest, t.ref, t.user, t.time, t.status])
+                ["Transaction No", "Type", "Part No", "Part Name", "Batch No", "Quantity", "Source", "Destination", "Reference", "Receiver / Operator Name", "System User", "Time", "Status"],
+                transactions.map((t) => [t.id, t.type, t.code, t.partName || t.desc || "", t.batchNo || "—", t.qty, t.source, t.dest, t.ref, t.receiverName || t.user, t.user, t.time, t.status])
               )
             }
             className="flex items-center gap-2 px-3 py-2 bg-white border border-[#cfd9e4] rounded-xl text-xs font-semibold text-[#18324d] hover:bg-[#f7f9fc]"
@@ -2206,7 +2829,7 @@ function HistoryView({
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search transaction ID, part no, reference, user, or location..."
+              placeholder="Search transaction ID, part no, part name, batch no, reference, user..."
               className="w-full pl-10 pr-4 py-2.5 border border-[#cfd9e4] rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#2463a6]"
             />
           </div>
@@ -2300,16 +2923,19 @@ function TxTable({
 
   return (
     <div className="overflow-x-auto border border-[#dfe6ee] rounded-xl">
-      <table className="w-full text-left border-collapse min-w-[850px]">
+      <table className="w-full text-left border-collapse min-w-[950px]">
         <thead>
           <tr className="bg-[#f7f9fc] text-[#5c6f83] text-xs font-bold border-b border-[#dfe6ee]">
             <th className="p-3">Transaction No.</th>
             <th className="p-3">Type</th>
-            <th className="p-3">Part</th>
+            <th className="p-3">Part No</th>
+            <th className="p-3">Part Name</th>
+            <th className="p-3">Batch No</th>
             <th className="p-3">Quantity</th>
             <th className="p-3">Source</th>
             <th className="p-3">Destination</th>
             <th className="p-3">Reference</th>
+            <th className="p-3 bg-blue-50/50 text-[#18324d]">Receiver / Name</th>
             <th className="p-3">User / Time</th>
             <th className="p-3">Status</th>
             {canManage && <th className="p-3">Actions</th>}
@@ -2330,9 +2956,18 @@ function TxTable({
                     {t.type}
                   </span>
                 </td>
-                <td className="p-3">
-                  <div className="font-bold font-mono text-[#18324d]">{t.code}</div>
-                  <div className="text-[#65768a] text-[11px]">{t.desc}</div>
+                <td className="p-3 font-bold font-mono text-[#18324d]">{t.code}</td>
+                <td className="p-3 font-medium text-[#18324d] max-w-[200px]">
+                  <div className="truncate" title={t.partName || t.desc}>{t.partName || t.desc || "—"}</div>
+                </td>
+                <td className="p-3 font-mono">
+                  {t.batchNo ? (
+                    <span className="inline-block px-2 py-0.5 bg-blue-50 text-blue-800 rounded font-semibold border border-blue-200 text-[11px]">
+                      {t.batchNo}
+                    </span>
+                  ) : (
+                    <span className="text-[#a0aec0] text-xs">—</span>
+                  )}
                 </td>
                 <td className="p-3 font-mono font-bold">
                   <span className={isIssue ? "text-amber-700" : "text-emerald-700"}>
@@ -2343,6 +2978,20 @@ function TxTable({
                 <td className="p-3 font-mono text-[#65768a]">{t.source}</td>
                 <td className="p-3 font-mono text-[#65768a]">{t.dest}</td>
                 <td className="p-3 font-mono font-medium">{t.ref}</td>
+                <td className="p-3 bg-blue-50/20">
+                  <div className="font-semibold text-[#18324d]">
+                    {t.receiverName || t.unpackedByName || t.user}
+                  </div>
+                  {t.type === "Receiving" && (
+                    <div className="text-[10px] text-emerald-700 font-medium">Receiver</div>
+                  )}
+                  {t.type === "Production Issue" && (
+                    <div className="text-[10px] text-amber-700 font-medium">Issuer / Line</div>
+                  )}
+                  {t.type === "Stock Return" && (
+                    <div className="text-[10px] text-emerald-700 font-medium">Returnee</div>
+                  )}
+                </td>
                 <td className="p-3">
                   <div className="font-semibold text-[#18324d]">{t.user}</div>
                   <div className="text-[11px] text-[#65768a]">{t.time}</div>

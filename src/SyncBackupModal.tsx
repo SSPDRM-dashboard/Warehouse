@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { Item, Balance, Transaction, UserAccount } from "./types";
 import { seedItems, initialBalances, initialTransactions } from "./mockData";
-import { defaultUsers } from "./App";
+import { defaultUsers } from "./defaultUsers";
 
 interface SyncBackupModalProps {
   isOpen: boolean;

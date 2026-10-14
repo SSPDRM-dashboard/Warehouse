@@ -1,0 +1,92 @@
+{
+  "entities": {
+    "Item": {
+      "title": "Item",
+      "description": "Warehouse master item record",
+      "type": "object",
+      "properties": {
+        "model": { "type": "string", "maxLength": 100 },
+        "code": { "type": "string", "maxLength": 64 },
+        "partName": { "type": "string", "maxLength": 200 },
+        "desc": { "type": "string", "maxLength": 200 },
+        "category": { "type": "string", "maxLength": 100 },
+        "uom": { "type": "string", "maxLength": 30 },
+        "min": { "type": "number" },
+        "active": { "type": "boolean" }
+      },
+      "required": ["code", "desc", "uom"]
+    },
+    "Balance": {
+      "title": "Balance",
+      "description": "Inventory stock balance by location",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "maxLength": 64 },
+        "loc": { "type": "string", "maxLength": 64 },
+        "qty": { "type": "number" },
+        "batchNo": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["code", "loc", "qty"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Warehouse stock transaction movement record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 64 },
+        "type": { "type": "string", "maxLength": 50 },
+        "code": { "type": "string", "maxLength": 64 },
+        "partName": { "type": "string", "maxLength": 200 },
+        "desc": { "type": "string", "maxLength": 200 },
+        "batchNo": { "type": "string", "maxLength": 64 },
+        "qty": { "type": "number" },
+        "source": { "type": "string", "maxLength": 100 },
+        "dest": { "type": "string", "maxLength": 100 },
+        "ref": { "type": "string", "maxLength": 100 },
+        "user": { "type": "string", "maxLength": 64 },
+        "receiverName": { "type": "string", "maxLength": 100 },
+        "unpackedByName": { "type": "string", "maxLength": 100 },
+        "unpacked": { "type": "boolean" },
+        "unpackDate": { "type": "string", "maxLength": 30 },
+        "time": { "type": "string", "maxLength": 50 },
+        "status": { "type": "string", "maxLength": 30 }
+      },
+      "required": ["id", "type", "code", "qty", "source", "dest"]
+    },
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "User account in the warehouse system",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 64 },
+        "username": { "type": "string", "maxLength": 64 },
+        "password": { "type": "string", "maxLength": 64 },
+        "name": { "type": "string", "maxLength": 100 },
+        "role": { "type": "string", "maxLength": 30 }
+      },
+      "required": ["id", "username", "role"]
+    }
+  },
+  "firestore": {
+    "/items/{itemId}": {
+      "schema": "Item",
+      "description": "Collection of all registered master parts"
+    },
+    "/balances/{balanceId}": {
+      "schema": "Balance",
+      "description": "Current on-hand inventory balances by part and location"
+    },
+    "/transactions/{transactionId}": {
+      "schema": "Transaction",
+      "description": "Audit trail log of all inventory movements"
+    },
+    "/users/{userId}": {
+      "schema": "UserAccount",
+      "description": "Warehouse user accounts and roles"
+    },
+    "/warehouse/{docId}": {
+      "schema": "WarehouseState",
+      "description": "Global synchronized state across handphones and desktops"
+    }
+  }
+}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { GoogleGenAI } from "@google/genai";
 import {
   LayoutDashboard,
@@ -34,6 +34,7 @@ import { Item, Balance, Transaction, Role, Page, UserAccount } from "./types";
 import { seedItems, initialBalances, initialTransactions } from "./mockData";
 import { SyncBackupModal } from "./SyncBackupModal";
 import { DailyReportsView } from "./DailyReportsView";
+import { subscribeToWarehouseState, pushWarehouseStateToCloud } from "./warehouseStore";
 
 export const defaultUsers: UserAccount[] = [
   { id: "usr_1", username: "admin", password: "password123", name: "System Administrator", role: "Admin" },
@@ -153,6 +154,37 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("wh_users", JSON.stringify(users));
   }, [users]);
+
+  // Real-time Cloud Firestore live sync (Web, Mobile & Studio)
+  const isRemoteUpdate = useRef(false);
+
+  useEffect(() => {
+    const unsubscribe = subscribeToWarehouseState(
+      (cloudData) => {
+        isRemoteUpdate.current = true;
+        setItems(cloudData.items);
+        setBalances(cloudData.balances);
+        setTransactions(cloudData.transactions);
+        if (cloudData.users && cloudData.users.length > 0) {
+          setUsers(cloudData.users);
+        }
+      },
+      (err) => {
+        console.error("Cloud sync error:", err);
+      }
+    );
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (isRemoteUpdate.current) {
+      isRemoteUpdate.current = false;
+      return;
+    }
+    pushWarehouseStateToCloud(items, balances, transactions, users).catch((err) => {
+      console.error("Failed to push state to cloud:", err);
+    });
+  }, [items, balances, transactions, users]);
 
   // Helper functions
   const stock = (code: string, loc?: string) => {
@@ -319,6 +351,11 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-3">
+            <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-xs font-medium">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span>Live Sync Active (Web, Mobile & Studio)</span>
+            </div>
+
             <button
               onClick={() => setIsSyncModalOpen(true)}
               className="flex items-center gap-2 px-3 py-1.5 bg-[#f0f5fc] hover:bg-[#e1edfc] text-[#2463a6] border border-[#cfd9e4] rounded-lg text-xs font-semibold transition"

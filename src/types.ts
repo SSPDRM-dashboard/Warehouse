@@ -39,9 +39,19 @@ export interface Balance {
   batchNo?: string; // Batch No
 }
 
-export interface Transaction {
+export type Transaction = {
   id: string;
-  type: "Receiving" | "Production Issue" | "Stock Return" | "Opening Stock" | "Adjustment" | "Transfer" | "Unpacking";
+  type: 
+    | "Receiving" 
+    | "Production Issue" 
+    | "Stock Return" 
+    | "Opening Stock" 
+    | "Adjustment" 
+    | "Transfer" 
+    | "Unpacking"
+    | "Forklift Transfer"
+    | "Unpack Log"
+    | "Sent to Operation";
   code: string; // Part No
   partName?: string; // Part Name
   desc?: string; // Description
@@ -58,3 +68,43 @@ export interface Transaction {
   time: string;
   status: "Posted" | "Pending" | "Cancelled";
 }
+
+export type UnpackStage =
+  | "Awaiting Forklift"
+  | "Forklift In-Transit"
+  | "At Unpacking Bay"
+  | "Unpacked & Ready for Operation"
+  | "Sent to Operation";
+
+export interface UnpackRecord {
+  id: string;
+  receivingRef: string;
+  code: string;
+  desc: string;
+  model: string;
+  category: string;
+  uom: string;
+  receivedQty: number;
+  packagingType: string;
+  sourceDock: string;
+  unpackBay: string;
+  targetOperation: string;
+  stage: UnpackStage;
+  createdAt: string;
+  notes?: string;
+  forkliftDriver?: string;
+  haulsAt?: string;
+  operatorName?: string;
+  unpackedQty?: number;
+  goodQty?: number;
+  damagedQty?: number;
+  unpackedAt?: string;
+  receiverName?: string;
+  carrierMethod?: string;
+  sentAt?: string;
+  operationDest?: string;
+  operationReceiver?: string;
+  sentToOperationAt?: string;
+}
+
+

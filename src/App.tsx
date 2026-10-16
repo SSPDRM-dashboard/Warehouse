@@ -774,11 +774,10 @@ function DashboardView({
                   >
                     <div>
                       <div className="font-bold text-[#18324d]">{i.code} — {i.desc}</div>
-                      <div className="text-[#65768a]">Category: {i.category}</div>
                     </div>
                     <div className="text-right font-mono">
                       <div className="font-bold text-amber-800">
-                        {totalQty} {i.uom}
+                        {totalQty}
                       </div>
                       <div className="text-[11px] text-[#65768a]">Min: {i.min}</div>
                     </div>
@@ -839,8 +838,7 @@ function ItemsView({
   const filtered = items.filter(
     (i) =>
       i.code.toLowerCase().includes(search.toLowerCase()) ||
-      i.desc.toLowerCase().includes(search.toLowerCase()) ||
-      i.category.toLowerCase().includes(search.toLowerCase())
+      i.desc.toLowerCase().includes(search.toLowerCase())
   );
 
   const toggleStatus = (code: string) => {
@@ -880,11 +878,11 @@ function ItemsView({
         const firstRowRaw = parseLine(lines[0]);
         const firstRow = firstRowRaw.map((x) => x.toLowerCase().replace(/['"]+/g, ""));
         
-        const headerKeywords = ["part", "code", "sku", "item", "desc", "description", "model", "category", "uom", "min"];
+        const headerKeywords = ["part", "code", "sku", "item", "desc", "description", "model", "min"];
         const hasHeaders = firstRow.some((h) => headerKeywords.some((k) => h.includes(k)));
 
         let dataLines = hasHeaders ? lines.slice(1) : lines;
-        let modelIdx = -1, codeIdx = -1, descIdx = -1, catIdx = -1, uomIdx = -1, minIdx = -1;
+        let modelIdx = -1, codeIdx = -1, descIdx = -1, minIdx = -1;
 
         if (hasHeaders) {
           const idx = (keys: string[]) => {
@@ -897,8 +895,6 @@ function ItemsView({
           modelIdx = idx(["model", "series"]);
           codeIdx = idx(["part", "code", "sku", "item"]);
           descIdx = idx(["desc", "name", "description", "title"]);
-          catIdx = idx(["category", "cat", "group"]);
-          uomIdx = idx(["uom", "unit"]);
           minIdx = idx(["min", "minimum", "stock"]);
         }
 
@@ -912,9 +908,7 @@ function ItemsView({
           let model = modelIdx >= 0 ? (r[modelIdx] || "") : (hasHeaders ? "" : (r[0] || ""));
           let code = (codeIdx >= 0 ? r[codeIdx] : "") || r[1] || r[0] || "";
           let desc = (descIdx >= 0 ? r[descIdx] : "") || r[2] || r[1] || code;
-          let category = catIdx >= 0 ? (r[catIdx] || "Automotive Parts") : (r[3] || "Automotive Parts");
-          let uom = uomIdx >= 0 ? (r[uomIdx] || "PCS") : (r[4] || "PCS");
-          let min = minIdx >= 0 ? Number(r[minIdx]) : Number(r[5]);
+          let min = minIdx >= 0 ? Number(r[minIdx]) : Number(r[3]);
 
           if (!code && r.length > 0) code = r[0];
           if (!desc && code) desc = code;
@@ -923,8 +917,6 @@ function ItemsView({
             model: model.trim(),
             code: code.trim().toUpperCase(),
             desc: desc.trim(),
-            category: category.trim() || "Automotive Parts",
-            uom: (uom.trim() || "PCS").toUpperCase(),
             min: Number.isFinite(min) ? min : 10,
             active: true,
           };
@@ -967,9 +959,9 @@ function ItemsView({
             onClick={() =>
               downloadCSV(
                 "item_master_template.csv",
-                ["Model", "Part No", "Description", "Category", "UOM", "Minimum Stock"],
+                ["Model", "Part No", "Description", "Minimum Stock"],
                 [
-                  ["Civic FD", "PN-SAMPLE", "Sample Part Description", "Automotive Parts", "PCS", "10"]
+                  ["Civic FD", "PN-SAMPLE", "Sample Part Description", "10"]
                 ]
               )
             }
@@ -982,8 +974,8 @@ function ItemsView({
             onClick={() =>
               downloadCSV(
                 "item_master.csv",
-                ["Model", "Part No", "Description", "Category", "UOM", "Minimum Stock", "Status"],
-                items.map((i) => [i.model, i.code, i.desc, i.category, i.uom, i.min, i.active ? "Active" : "Inactive"])
+                ["Model", "Part No", "Description", "Minimum Stock", "Status"],
+                items.map((i) => [i.model, i.code, i.desc, i.min, i.active ? "Active" : "Inactive"])
               )
             }
             className="flex items-center gap-2 px-3 py-2 bg-white border border-[#cfd9e4] rounded-xl text-xs font-semibold text-[#18324d] hover:bg-[#f7f9fc]"
@@ -1015,7 +1007,7 @@ function ItemsView({
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by model, part no, description, or category..."
+              placeholder="Search by model, part no, or description..."
               className="w-full pl-10 pr-4 py-2.5 border border-[#cfd9e4] rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#2463a6]"
             />
           </div>
@@ -1028,7 +1020,6 @@ function ItemsView({
                 <th className="p-3">Model</th>
                 <th className="p-3">Part No</th>
                 <th className="p-3">Description</th>
-                <th className="p-3">Category / UOM</th>
                 <th className="p-3">Stock On Hand</th>
                 <th className="p-3">Min Level</th>
                 <th className="p-3">Status</th>
@@ -1038,7 +1029,7 @@ function ItemsView({
             <tbody className="divide-y divide-[#e9eef3] text-xs">
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={canManage ? 8 : 7} className="text-center py-8 text-[#65768a]">
+                  <td colSpan={canManage ? 7 : 6} className="text-center py-8 text-[#65768a]">
                     No matching parts found.
                   </td>
                 </tr>
@@ -1051,12 +1042,8 @@ function ItemsView({
                       <td className="p-3 font-medium text-[#42566c]">{i.model || "—"}</td>
                       <td className="p-3 font-bold font-mono text-[#18324d]">{i.code}</td>
                       <td className="p-3 font-medium text-[#18324d]">{i.desc}</td>
-                      <td className="p-3">
-                        <span className="font-medium text-[#18324d]">{i.category}</span>
-                        <div className="text-[11px] text-[#65768a]">{i.uom}</div>
-                      </td>
                       <td className="p-3 font-mono font-bold">
-                        <span className={isLow ? "text-amber-700" : "text-[#18324d]"}>{currentStock}</span> {i.uom}
+                        <span className={isLow ? "text-amber-700" : "text-[#18324d]"}>{currentStock}</span>
                       </td>
                       <td className="p-3 font-mono text-[#65768a]">{i.min}</td>
                       <td className="p-3">
@@ -1165,8 +1152,6 @@ function ItemModal({
   const [model, setModel] = useState(item?.model || "");
   const [code, setCode] = useState(item?.code || "");
   const [desc, setDesc] = useState(item?.desc || "");
-  const [category, setCategory] = useState(item?.category || "Automotive Parts");
-  const [uom, setUom] = useState(item?.uom || "PCS");
   const [min, setMin] = useState(item?.min ?? 10);
   const [active, setActive] = useState(item?.active ?? true);
   const [error, setError] = useState("");
@@ -1188,8 +1173,6 @@ function ItemModal({
       model: model.trim(),
       code: code.trim().toUpperCase(),
       desc: desc.trim(),
-      category,
-      uom,
       min: Number(min),
       active,
     });
@@ -1233,21 +1216,6 @@ function ItemModal({
                 className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono disabled:bg-[#f3f6fa]"
               />
             </div>
-            <div>
-              <label className="block text-xs font-semibold text-[#42566c] mb-1">Category *</label>
-              <select
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm bg-white"
-              >
-                <option value="Automotive Parts">Automotive Parts</option>
-                <option value="Packaging">Packaging</option>
-                <option value="Consumables">Consumables</option>
-                <option value="Spare Parts">Spare Parts</option>
-                <option value="Raw Materials">Raw Materials</option>
-                <option value="Other">Other</option>
-              </select>
-            </div>
             <div className="sm:col-span-2">
               <label className="block text-xs font-semibold text-[#42566c] mb-1">Description *</label>
               <input
@@ -1258,21 +1226,6 @@ function ItemModal({
                 placeholder="e.g. Heavy Duty Steel Clamp"
                 className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm"
               />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-[#42566c] mb-1">Unit of Measure (UOM) *</label>
-              <select
-                value={uom}
-                onChange={(e) => setUom(e.target.value)}
-                className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm bg-white"
-              >
-                <option value="PCS">PCS</option>
-                <option value="UNIT">UNIT</option>
-                <option value="BOX">BOX</option>
-                <option value="SET">SET</option>
-                <option value="KG">KG</option>
-                <option value="LITRE">LITRE</option>
-              </select>
             </div>
             <div>
               <label className="block text-xs font-semibold text-[#42566c] mb-1">Minimum Stock Level *</label>
@@ -1540,7 +1493,7 @@ function UnpackingView({
               <div className="p-3 bg-emerald-50/50 border border-emerald-200 rounded-xl text-xs space-y-1">
                 <div className="font-bold text-emerald-900">{matchedItem.desc}</div>
                 <div className="text-emerald-700 font-mono">
-                  {matchedItem.code} · {matchedItem.uom}
+                  {matchedItem.code}
                 </div>
               </div>
             )}
@@ -1770,7 +1723,7 @@ function ReceivingView({
     };
     setTransactions([newTx, ...transactions]);
     setNotice({
-      msg: `Successfully posted receipt ${id} by ${finalReceiver} (Batch: ${batchNo || "N/A"}). Total stock for ${matchedItem.code}: ${stock(matchedItem.code) + qNum} ${matchedItem.uom}.`,
+      msg: `Successfully posted receipt ${id} by ${finalReceiver} (Batch: ${batchNo || "N/A"}). Total stock for ${matchedItem.code}: ${stock(matchedItem.code) + qNum}.`,
       type: "success",
     });
     setCodeQuery("");
@@ -1847,7 +1800,7 @@ function ReceivingView({
                     <div className="p-3 bg-emerald-50/50 border border-emerald-200 rounded-xl text-xs space-y-1">
                       <div className="font-bold text-emerald-900">{matchedItem.desc}</div>
                       <div className="text-emerald-700 font-mono">
-                        {matchedItem.code} · {matchedItem.uom} · On Hand: {stock(matchedItem.code)}
+                        {matchedItem.code} · On Hand: {stock(matchedItem.code)}
                       </div>
                     </div>
 
@@ -2070,10 +2023,10 @@ function IssueView({
     if (currentLocStock < qNum) {
       const allLocDetails = balances
         .filter((b) => b.code.trim().toUpperCase() === matchedItem.code.trim().toUpperCase() && b.qty > 0)
-        .map((b) => `${b.loc}: ${b.qty} ${matchedItem.uom}`)
+        .map((b) => `${b.loc}: ${b.qty}`)
         .join(", ");
       setNotice({
-        msg: `Insufficient stock at location "${targetLoc}". Available: ${currentLocStock} ${matchedItem.uom}. (In storage: ${allLocDetails || "0 " + matchedItem.uom})`,
+        msg: `Insufficient stock at location "${targetLoc}". Available: ${currentLocStock}. (In storage: ${allLocDetails || "0"})`,
         type: "error",
       });
       return;
@@ -2117,7 +2070,7 @@ function IssueView({
     };
     setTransactions([newTx, ...transactions]);
     setNotice({
-      msg: `Production issue posted successfully. Transaction ${id} (Batch: ${batchNo || "N/A"}). Remaining stock at ${targetLoc}: ${currentLocStock - qNum} ${matchedItem.uom}.`,
+      msg: `Production issue posted successfully. Transaction ${id} (Batch: ${batchNo || "N/A"}). Remaining stock at ${targetLoc}: ${currentLocStock - qNum}.`,
       type: "success",
     });
     setCodeQuery("");
@@ -2194,13 +2147,13 @@ function IssueView({
                     <div className="p-3 bg-emerald-50/50 border border-emerald-200 rounded-xl text-xs space-y-1">
                       <div className="font-bold text-emerald-900">{matchedItem.desc}</div>
                       <div className="text-emerald-700 font-mono">
-                        {matchedItem.code} · {matchedItem.uom} · Total In Stock: {stock(matchedItem.code)} {matchedItem.uom}
+                        {matchedItem.code} · Total In Stock: {stock(matchedItem.code)}
                       </div>
                       <div className="text-[11px] text-[#2463a6] font-semibold pt-1">
                         Storage Location Breakdown:{" "}
                         {balances
                           .filter((b) => b.code.trim().toUpperCase() === matchedItem.code.trim().toUpperCase() && b.qty > 0)
-                          .map((b) => `${b.loc} (${b.qty} ${matchedItem.uom})`)
+                          .map((b) => `${b.loc} (${b.qty})`)
                           .join(", ") || "No stock in storage"}
                       </div>
                     </div>
@@ -2259,7 +2212,7 @@ function IssueView({
                     const locQty = matchedItem ? stock(matchedItem.code, l) : 0;
                     return (
                       <option key={l} value={l}>
-                        {l} {matchedItem ? `(${locQty} ${matchedItem.uom} available)` : ""}
+                        {l} {matchedItem ? `(${locQty} available)` : ""}
                       </option>
                     );
                   })}
@@ -2341,19 +2294,19 @@ function IssueView({
                   <div className="flex justify-between">
                     <span>Stock at {sourceLoc}</span>
                     <strong className="text-[#18324d] font-mono">
-                      {sourceStock} {matchedItem.uom}
+                      {sourceStock}
                     </strong>
                   </div>
                   <div className="flex justify-between">
                     <span>Requested Qty</span>
                     <strong className="text-[#18324d] font-mono">
-                      {qNum || 0} {matchedItem.uom}
+                      {qNum || 0}
                     </strong>
                   </div>
                   <div className="flex justify-between border-t border-[#dfe6ee] pt-2">
                     <span>Balance After Issue</span>
                     <strong className={`font-mono ${remainder < 0 ? "text-red-700" : "text-[#2463a6]"}`}>
-                      {remainder} {matchedItem.uom}
+                      {remainder}
                     </strong>
                   </div>
                 </>
@@ -2445,7 +2398,7 @@ function ReturnView({
     };
     setTransactions([newTx, ...transactions]);
     setNotice({
-      msg: `Stock return posted successfully. Transaction ${id} (Batch: ${batchNo || "N/A"}). Updated stock for ${matchedItem.code}: ${stock(matchedItem.code) + qNum} ${matchedItem.uom}.`,
+      msg: `Stock return posted successfully. Transaction ${id} (Batch: ${batchNo || "N/A"}). Updated stock for ${matchedItem.code}: ${stock(matchedItem.code) + qNum}.`,
       type: "success",
     });
     setCodeQuery("");
@@ -2512,7 +2465,7 @@ function ReturnView({
                     <div className="p-3 bg-emerald-50/50 border border-emerald-200 rounded-xl text-xs space-y-1">
                       <div className="font-bold text-emerald-900">{matchedItem.desc}</div>
                       <div className="text-emerald-700 font-mono">
-                        {matchedItem.code} · {matchedItem.uom} · Total On Hand: {stock(matchedItem.code)}
+                        {matchedItem.code} · Total On Hand: {stock(matchedItem.code)}
                       </div>
                     </div>
 
@@ -2666,13 +2619,11 @@ function InventoryView({
     .map((b) => {
       const i = items.find((x) => x.code === b.code) || {
         desc: "Unknown part",
-        uom: "PCS",
         min: 0,
       };
       return {
         ...b,
         desc: i.desc,
-        uom: i.uom,
         min: i.min,
       };
     })
@@ -2694,8 +2645,8 @@ function InventoryView({
           onClick={() =>
             downloadCSV(
               "inventory_balance.csv",
-              ["Part No", "Description", "Location", "Quantity", "UOM", "Minimum Stock"],
-              rows.map((r) => [r.code, r.desc, r.loc, r.qty, r.uom, r.min])
+              ["Part No", "Description", "Location", "Quantity", "Minimum Stock"],
+              rows.map((r) => [r.code, r.desc, r.loc, r.qty, r.min])
             )
           }
           className="flex items-center gap-2 px-3 py-2 bg-white border border-[#cfd9e4] rounded-xl text-xs font-semibold text-[#18324d] hover:bg-[#f7f9fc]"
@@ -2745,7 +2696,7 @@ function InventoryView({
                       <td className="p-3 font-medium text-[#18324d]">{b.desc}</td>
                       <td className="p-3 font-mono font-bold text-[#2463a6]">{b.loc}</td>
                       <td className="p-3 font-mono font-bold text-[#18324d]">
-                        {b.qty.toLocaleString()} {b.uom}
+                        {b.qty.toLocaleString()}
                       </td>
                       <td className="p-3 font-mono text-[#65768a]">{b.min}</td>
                       <td className="p-3">

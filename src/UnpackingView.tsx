@@ -330,8 +330,6 @@ export function UnpackingView({
       code: foundItem.code,
       desc: foundItem.desc,
       model: foundItem.model,
-      category: foundItem.category,
-      uom: foundItem.uom,
       receivedQty: qNum,
       packagingType: manualPackaging,
       sourceDock: manualSourceDock,
@@ -344,7 +342,7 @@ export function UnpackingView({
 
     setRecords([newRecord, ...records]);
     setManualNotice({
-      msg: `Created record ${newId} for ${foundItem.code} (${qNum} ${foundItem.uom}). Forklift is notified to transport to ${manualUnpackBay}.`,
+      msg: `Created record ${newId} for ${foundItem.code} (${qNum}). Forklift is notified to transport to ${manualUnpackBay}.`,
       type: "success",
     });
 
@@ -373,7 +371,6 @@ export function UnpackingView({
       "Part No",
       "Description",
       "Model",
-      "UOM",
       "Received Qty",
       "Unpacked Qty",
       "Good Qty",
@@ -394,7 +391,6 @@ export function UnpackingView({
       `"${r.code}"`,
       `"${r.desc.replace(/"/g, '""')}"`,
       `"${r.model}"`,
-      `"${r.uom}"`,
       r.receivedQty,
       r.unpackedQty ?? "",
       r.goodQty ?? "",
@@ -607,7 +603,7 @@ export function UnpackingView({
                     <div className="p-2.5 bg-amber-50/50 rounded-lg flex items-center justify-between text-xs font-mono">
                       <span className="text-[#65768a]">Received Qty:</span>
                       <span className="font-bold text-amber-900">
-                        {r.receivedQty} {r.uom}
+                        {r.receivedQty}
                       </span>
                     </div>
 
@@ -677,7 +673,7 @@ export function UnpackingView({
                     <div className="p-2.5 bg-blue-50/50 rounded-lg flex items-center justify-between text-xs font-mono">
                       <span className="text-[#65768a]">To Unpack:</span>
                       <span className="font-bold text-blue-900">
-                        {r.receivedQty} {r.uom}
+                        {r.receivedQty}
                       </span>
                     </div>
 
@@ -752,7 +748,7 @@ export function UnpackingView({
                         <div className="flex justify-between text-[#18324d]">
                           <span>Unpacked Count:</span>
                           <strong className="text-emerald-900 font-bold">
-                            {r.unpackedQty} {r.uom}
+                            {r.unpackedQty}
                           </strong>
                         </div>
                         <div className="flex justify-between text-[11px] text-[#65768a]">
@@ -802,7 +798,7 @@ export function UnpackingView({
                       <div className="flex justify-between">
                         <span className="font-mono font-bold text-[#18324d]">{r.code}</span>
                         <span className="font-mono font-bold text-emerald-800">
-                          {r.goodQty ?? r.unpackedQty} {r.uom}
+                          {r.goodQty ?? r.unpackedQty}
                         </span>
                       </div>
                       <div className="text-[10px] text-gray-500 flex justify-between">
@@ -897,11 +893,11 @@ export function UnpackingView({
                       </td>
                       <td className="py-3 px-3 font-mono">
                         <div>
-                          <strong>Recv:</strong> {r.receivedQty} {r.uom}
+                          <strong>Recv:</strong> {r.receivedQty}
                         </div>
                         {r.unpackedQty !== undefined && (
                           <div className="text-emerald-800 font-bold">
-                            <strong>Unpacked:</strong> {r.unpackedQty} {r.uom}
+                            <strong>Unpacked:</strong> {r.unpackedQty}
                           </div>
                         )}
                         {r.damagedQty ? (
@@ -1147,7 +1143,7 @@ export function UnpackingView({
               <div className="flex justify-between">
                 <span className="text-[#65768a]">Quantity on Pallet:</span>
                 <strong className="text-amber-900 font-bold font-mono">
-                  {selectedForForklift.receivedQty} {selectedForForklift.uom}
+                  {selectedForForklift.receivedQty}
                 </strong>
               </div>
               <div className="flex justify-between">
@@ -1249,7 +1245,7 @@ export function UnpackingView({
               <div className="flex justify-between">
                 <span className="text-[#65768a]">Received on Pallet:</span>
                 <strong className="font-mono text-blue-900 font-bold">
-                  {selectedForUnpack.receivedQty} {selectedForUnpack.uom}
+                  {selectedForUnpack.receivedQty}
                 </strong>
               </div>
               <div className="flex justify-between">
@@ -1385,8 +1381,7 @@ export function UnpackingView({
               <div className="flex justify-between">
                 <span className="text-[#65768a]">Verified Unpacked Qty:</span>
                 <strong className="font-mono text-emerald-900 font-bold">
-                  {selectedForOperation.goodQty ?? selectedForOperation.unpackedQty}{" "}
-                  {selectedForOperation.uom}
+                  {selectedForOperation.goodQty ?? selectedForOperation.unpackedQty}
                 </strong>
               </div>
               <div className="flex justify-between">
@@ -1532,18 +1527,18 @@ export function UnpackingView({
               <div className="border-t border-b py-2 grid grid-cols-3 gap-1 text-center">
                 <div className="bg-white p-1 rounded border">
                   <div className="text-[9px] text-gray-500">RECEIVED</div>
-                  <div className="font-bold">{slipRecord.receivedQty} {slipRecord.uom}</div>
+                  <div className="font-bold">{slipRecord.receivedQty}</div>
                 </div>
                 <div className="bg-white p-1 rounded border">
                   <div className="text-[9px] text-gray-500">UNPACKED</div>
                   <div className="font-bold text-blue-700">
-                    {slipRecord.unpackedQty ?? "—"} {slipRecord.uom}
+                    {slipRecord.unpackedQty ?? "—"}
                   </div>
                 </div>
                 <div className="bg-white p-1 rounded border">
                   <div className="text-[9px] text-gray-500">TO OPERATION</div>
                   <div className="font-bold text-emerald-700">
-                    {slipRecord.goodQty ?? slipRecord.unpackedQty ?? slipRecord.receivedQty} {slipRecord.uom}
+                    {slipRecord.goodQty ?? slipRecord.unpackedQty ?? slipRecord.receivedQty}
                   </div>
                 </div>
               </div>

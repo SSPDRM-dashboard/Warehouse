@@ -26,8 +26,6 @@ export interface Item {
   code: string; // Part No
   partName?: string; // Part Name
   desc: string; // Part Name / Description
-  category: string;
-  uom: string;
   min: number;
   active: boolean;
 }
@@ -82,8 +80,6 @@ export interface UnpackRecord {
   code: string;
   desc: string;
   model: string;
-  category: string;
-  uom: string;
   receivedQty: number;
   packagingType: string;
   sourceDock: string;

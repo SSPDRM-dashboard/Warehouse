@@ -40,19 +40,9 @@ export function DailyReportsView({
   const [activeReportTab, setActiveReportTab] = useState<"all" | "incoming" | "unpacking" | "prod1">("all");
   const [searchQuery, setSearchQuery] = useState("");
 
-  const getItemUom = (code: string) => {
-    const item = items.find((i) => i.code.trim().toUpperCase() === code.trim().toUpperCase());
-    return item ? item.uom : "PCS";
-  };
-
   const getItemModel = (code: string) => {
     const item = items.find((i) => i.code.trim().toUpperCase() === code.trim().toUpperCase());
     return item ? item.model : "—";
-  };
-
-  const getItemCategory = (code: string) => {
-    const item = items.find((i) => i.code.trim().toUpperCase() === code.trim().toUpperCase());
-    return item ? item.category : "—";
   };
 
   // Check if transaction matches date
@@ -129,9 +119,7 @@ export function DailyReportsView({
       "Part Name",
       "Batch No",
       "Model",
-      "Category",
       "Quantity Received",
-      "UOM",
       "Destination Bin",
       "DO / Supplier Reference",
       "Receiver Name",
@@ -147,9 +135,7 @@ export function DailyReportsView({
       t.partName || t.desc || "",
       t.batchNo || "—",
       getItemModel(t.code),
-      getItemCategory(t.code),
       t.qty,
-      getItemUom(t.code),
       t.dest,
       t.ref,
       t.receiverName || t.user,
@@ -170,7 +156,6 @@ export function DailyReportsView({
       "Batch No",
       "Model",
       "Quantity Unpacked",
-      "UOM",
       "Storage Location",
       "Delivery Order / Batch Ref",
       "Unpacked By (Name)",
@@ -187,7 +172,6 @@ export function DailyReportsView({
       t.batchNo || "—",
       getItemModel(t.code),
       t.qty,
-      getItemUom(t.code),
       t.dest,
       t.ref,
       t.unpackedByName || t.receiverName || t.user,
@@ -208,7 +192,6 @@ export function DailyReportsView({
       "Batch No",
       "Model",
       "Quantity Sent",
-      "UOM",
       "Source Location",
       "Destination Line",
       "Production Ref / WO No",
@@ -226,7 +209,6 @@ export function DailyReportsView({
       t.batchNo || "—",
       getItemModel(t.code),
       t.qty,
-      getItemUom(t.code),
       t.source,
       t.dest,
       t.ref,
@@ -543,7 +525,7 @@ export function DailyReportsView({
                           )}
                         </td>
                         <td className="p-3 font-mono font-bold text-emerald-700">
-                          +{t.qty.toLocaleString()} {getItemUom(t.code)}
+                          +{t.qty.toLocaleString()}
                         </td>
                         <td className="p-3 font-mono text-[#42566c]">{t.dest}</td>
                         <td className="p-3 font-mono font-medium">{t.ref}</td>
@@ -624,7 +606,7 @@ export function DailyReportsView({
                           )}
                         </td>
                         <td className="p-3 font-mono font-bold text-blue-700">
-                          {t.qty.toLocaleString()} {getItemUom(t.code)}
+                          {t.qty.toLocaleString()}
                         </td>
                         <td className="p-3 font-mono text-[#42566c]">{t.dest}</td>
                         <td className="p-3 font-mono font-medium">{t.ref}</td>
@@ -705,7 +687,7 @@ export function DailyReportsView({
                           )}
                         </td>
                         <td className="p-3 font-mono font-bold text-amber-700">
-                          {t.qty.toLocaleString()} {getItemUom(t.code)}
+                          {t.qty.toLocaleString()}
                         </td>
                         <td className="p-3 font-mono text-[#42566c]">{t.source}</td>
                         <td className="p-3 bg-amber-50/40 font-semibold text-amber-950 font-mono">

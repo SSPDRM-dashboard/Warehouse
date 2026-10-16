@@ -1,12 +1,12 @@
 import { Item, Balance, Transaction } from "./types";
 
 export const seedItems: Item[] = [
-  { model: "Civic FD 2.0", code: "PN-1001", desc: "Engine Mounting Bracket", category: "Automotive Parts", uom: "PCS", min: 50, active: true },
-  { model: "Universal", code: "PN-1002", desc: "Returnable Plastic Case", category: "Packaging", uom: "UNIT", min: 20, active: true },
-  { model: "Line-A Assembly", code: "PN-1003", desc: "Steel Component Tray", category: "Packaging", uom: "PCS", min: 30, active: true },
-  { model: "Civic FC 1.5T", code: "PN-1004", desc: "Protective Cover", category: "Automotive Parts", uom: "PCS", min: 25, active: false },
-  { model: "CR-V Gen 5", code: "PN-1005", desc: "Precision Bearing Assembly", category: "Spare Parts", uom: "SET", min: 15, active: true },
-  { model: "Workshop General", code: "PN-1006", desc: "Hydraulic Fluid (20L)", category: "Consumables", uom: "LITRE", min: 40, active: true }
+  { model: "Civic FD 2.0", code: "PN-1001", desc: "Engine Mounting Bracket", min: 50, active: true },
+  { model: "Universal", code: "PN-1002", desc: "Returnable Plastic Case", min: 20, active: true },
+  { model: "Line-A Assembly", code: "PN-1003", desc: "Steel Component Tray", min: 30, active: true },
+  { model: "Civic FC 1.5T", code: "PN-1004", desc: "Protective Cover", min: 25, active: false },
+  { model: "CR-V Gen 5", code: "PN-1005", desc: "Precision Bearing Assembly", min: 15, active: true },
+  { model: "Workshop General", code: "PN-1006", desc: "Hydraulic Fluid (20L)", min: 40, active: true }
 ];
 
 export const initialBalances: Balance[] = [

@@ -10,11 +10,11 @@ export const seedItems: Item[] = [
 ];
 
 export const initialBalances: Balance[] = [
-  { code: "PN-1001", loc: "A-01-01", qty: 240 },
-  { code: "PN-1002", loc: "B-02-01", qty: 86 },
-  { code: "PN-1003", loc: "C-01-02", qty: 18 },
-  { code: "PN-1005", loc: "A-03-01", qty: 12 },
-  { code: "PN-1006", loc: "D-01-01", qty: 120 }
+  { code: "PN-1001", loc: "A-01-01", qty: 240, timestamp: "2026-10-14 08:30" },
+  { code: "PN-1002", loc: "B-02-01", qty: 86, timestamp: "2026-10-14 09:15" },
+  { code: "PN-1003", loc: "C-01-02", qty: 18, timestamp: "2026-10-14 10:00" },
+  { code: "PN-1005", loc: "A-03-01", qty: 12, timestamp: "2026-10-14 11:20" },
+  { code: "PN-1006", loc: "D-01-01", qty: 120, timestamp: "2026-10-14 13:45" }
 ];
 
 export const initialTransactions: Transaction[] = [

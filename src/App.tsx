@@ -28,7 +28,11 @@ import {
   Trash2,
   Share2,
   FileSpreadsheet,
-  PackageOpen
+  PackageOpen,
+  Box,
+  AlertCircle,
+  Check,
+  Clock
 } from "lucide-react";
 import { Item, Balance, Transaction, Role, Page, UserAccount } from "./types";
 import { seedItems, initialBalances, initialTransactions } from "./mockData";
@@ -49,19 +53,40 @@ const txNo = (prefix: string) =>
     .slice(2, 6)
     .toUpperCase()}`;
 
-const upsertBalance = (balances: Balance[], code: string, loc: string, delta: number) => {
+const upsertBalance = (
+  balances: Balance[],
+  code: string,
+  loc: string,
+  delta: number,
+  batchNo?: string,
+  timestamp?: string
+) => {
   let found = false;
   const targetCode = code.trim().toUpperCase();
   const targetLoc = loc.trim();
+  const timeNow = timestamp || new Date().toLocaleString();
   const out = balances.map((b) => {
     if (b.code.trim().toUpperCase() === targetCode && b.loc.trim().toLowerCase() === targetLoc.toLowerCase()) {
       found = true;
-      return { ...b, qty: Math.max(0, b.qty + delta) };
+      return {
+        ...b,
+        qty: Math.max(0, b.qty + delta),
+        batchNo: batchNo || b.batchNo,
+        timestamp: timeNow,
+        updatedAt: timeNow,
+      };
     }
     return b;
   });
   if (!found) {
-    out.push({ code: targetCode, loc: targetLoc, qty: Math.max(0, delta) });
+    out.push({
+      code: targetCode,
+      loc: targetLoc,
+      qty: Math.max(0, delta),
+      batchNo,
+      timestamp: timeNow,
+      updatedAt: timeNow,
+    });
   }
   return out;
 };
@@ -157,11 +182,27 @@ export default function App() {
 
   // Real-time Cloud Firestore live sync (Web, Mobile & Studio)
   const isRemoteUpdate = useRef(false);
+  const isInitialCloudSyncDone = useRef(false);
+  const lastSyncedJson = useRef("");
 
   useEffect(() => {
+    // If cloud response is delayed or offline, enable local sync after 1.5 seconds
+    const fallbackTimer = setTimeout(() => {
+      isInitialCloudSyncDone.current = true;
+    }, 1500);
+
     const unsubscribe = subscribeToWarehouseState(
       (cloudData) => {
+        clearTimeout(fallbackTimer);
         isRemoteUpdate.current = true;
+        isInitialCloudSyncDone.current = true;
+        lastSyncedJson.current = JSON.stringify({
+          items: cloudData.items,
+          balances: cloudData.balances,
+          transactions: cloudData.transactions,
+          users: cloudData.users,
+        });
+
         setItems(cloudData.items);
         setBalances(cloudData.balances);
         setTransactions(cloudData.transactions);
@@ -170,17 +211,34 @@ export default function App() {
         }
       },
       (err) => {
+        clearTimeout(fallbackTimer);
+        isInitialCloudSyncDone.current = true;
         console.error("Cloud sync error:", err);
       }
     );
-    return () => unsubscribe();
+    return () => {
+      clearTimeout(fallbackTimer);
+      unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
+    // CRITICAL: Do NOT push to cloud until the initial cloud sync has been completed.
+    // This prevents resetting or overwriting inventory that was already keyed in on mobile or other devices.
+    if (!isInitialCloudSyncDone.current) {
+      return;
+    }
     if (isRemoteUpdate.current) {
       isRemoteUpdate.current = false;
       return;
     }
+
+    const currentJson = JSON.stringify({ items, balances, transactions, users });
+    if (currentJson === lastSyncedJson.current) {
+      return;
+    }
+
+    lastSyncedJson.current = currentJson;
     pushWarehouseStateToCloud(items, balances, transactions, users).catch((err) => {
       console.error("Failed to push state to cloud:", err);
     });
@@ -827,12 +885,16 @@ function ItemsView({
   const [search, setSearch] = useState("");
   const [modalItem, setModalItem] = useState<Item | null | undefined>(undefined);
   const [deleteCode, setDeleteCode] = useState<string | null>(null);
+  const [deleteNotice, setDeleteNotice] = useState<string | null>(null);
 
   const confirmDelete = () => {
     if (!deleteCode) return;
-    setItems(items.filter((i) => i.code !== deleteCode));
-    setBalances(balances.filter((b) => b.code !== deleteCode));
+    const targetCode = deleteCode.trim().toUpperCase();
+    setItems((prev) => prev.filter((i) => i.code.trim().toUpperCase() !== targetCode));
+    // CRITICAL (Request 3): Do not change or wipe inventory that is already keyed in
+    setDeleteNotice(`Part ${targetCode} successfully deleted from Item Master.`);
     setDeleteCode(null);
+    setTimeout(() => setDeleteNotice(null), 4000);
   };
 
   const filtered = items.filter(
@@ -1000,6 +1062,13 @@ function ItemsView({
       </div>
 
       <div className="bg-white border border-[#dfe6ee] rounded-2xl p-6 shadow-xs space-y-4">
+        {deleteNotice && (
+          <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs flex items-center justify-between animate-in fade-in">
+            <span>{deleteNotice}</span>
+            <button onClick={() => setDeleteNotice(null)} className="text-emerald-700 hover:text-emerald-900 text-xs font-bold">✕</button>
+          </div>
+        )}
+
         <div className="flex items-center gap-3">
           <div className="relative flex-1">
             <Search className="absolute left-3.5 top-3 text-[#65768a]" size={16} />
@@ -1093,26 +1162,42 @@ function ItemsView({
       </div>
 
       {deleteCode && (
-        <div className="fixed inset-0 bg-[#07182b]/50 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl space-y-4">
-            <h3 className="text-lg font-bold text-[#18324d]">Confirm Deletion</h3>
-            <p className="text-sm text-[#42566c]">
-              Are you sure you want to delete part <strong className="font-mono">{deleteCode}</strong>? This will remove its master record and all associated warehouse stock balances.
+        <div className="fixed inset-0 bg-[#07182b]/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center gap-2 text-red-600 border-b pb-3">
+              <Trash2 size={20} />
+              <h3 className="text-base font-bold text-[#18324d]">Confirm Part Deletion</h3>
+            </div>
+            
+            <p className="text-xs text-[#42566c]">
+              Are you sure you want to delete part <strong className="font-mono text-red-700">{deleteCode}</strong>?
             </p>
-            <div className="flex justify-end gap-3 pt-4 border-t border-[#dfe6ee]">
+
+            {stock(deleteCode) > 0 && (
+              <div className="p-3 bg-blue-50 border border-blue-200 text-blue-900 rounded-xl text-xs space-y-1">
+                <div className="font-bold flex items-center gap-1">
+                  <AlertTriangle size={14} className="text-blue-600" /> Stock On Hand Notice
+                </div>
+                <div>
+                  This part currently has <strong>{stock(deleteCode)} units</strong> on hand. Deleting will remove the part from the master setup catalog, while keeping all existing inventory balances safe.
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-[#dfe6ee]">
               <button
                 type="button"
                 onClick={() => setDeleteCode(null)}
-                className="px-4 py-2 border border-[#cfd9e4] rounded-xl text-xs font-semibold text-[#18324d] hover:bg-[#f7f9fc]"
+                className="px-4 py-2 border border-[#cfd9e4] rounded-xl text-xs font-semibold text-[#18324d] hover:bg-[#f7f9fc] transition"
               >
                 Cancel
               </button>
               <button
                 type="button"
                 onClick={confirmDelete}
-                className="px-4 py-2 bg-red-600 text-white rounded-xl text-xs font-semibold hover:opacity-95"
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold shadow-sm transition"
               >
-                Delete Part
+                Yes, Delete Part
               </button>
             </div>
           </div>
@@ -1131,6 +1216,11 @@ function ItemsView({
             }
             setModalItem(undefined);
           }}
+          onDelete={(code) => {
+            setModalItem(undefined);
+            setDeleteCode(code);
+          }}
+          canManage={canManage}
           items={items}
         />
       )}
@@ -1142,11 +1232,15 @@ function ItemModal({
   item,
   onClose,
   onSave,
+  onDelete,
+  canManage,
   items,
 }: {
   item: Item | null;
   onClose: () => void;
   onSave: (i: Item) => void;
+  onDelete?: (code: string) => void;
+  canManage?: boolean;
   items: Item[];
 }) {
   const [model, setModel] = useState(item?.model || "");
@@ -1251,20 +1345,31 @@ function ItemModal({
             </div>
           </div>
 
-          <div className="flex justify-end gap-3 pt-4 border-t border-[#dfe6ee]">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 border border-[#cfd9e4] rounded-xl text-xs font-semibold text-[#18324d] hover:bg-[#f7f9fc]"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="px-4 py-2 bg-[#2463a6] text-white rounded-xl text-xs font-semibold hover:opacity-95"
-            >
-              Save Part
-            </button>
+          <div className="flex items-center justify-between gap-3 pt-4 border-t border-[#dfe6ee]">
+            {item && canManage && onDelete && (
+              <button
+                type="button"
+                onClick={() => onDelete(item.code)}
+                className="px-3.5 py-2 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition"
+              >
+                <Trash2 size={14} /> Delete Part
+              </button>
+            )}
+            <div className="flex items-center gap-2 ml-auto">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2 border border-[#cfd9e4] rounded-xl text-xs font-semibold text-[#18324d] hover:bg-[#f7f9fc]"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-2 bg-[#2463a6] text-white rounded-xl text-xs font-semibold hover:opacity-95"
+              >
+                Save Part
+              </button>
+            </div>
           </div>
         </form>
       </div>
@@ -1674,6 +1779,59 @@ function ReceivingView({
   role: Role;
   setPage?: (p: Page) => void;
 }) {
+  // Active container session state
+  const [activeContainer, setActiveContainer] = useState<{
+    containerNo: string;
+    batchNo: string;
+    doRef?: string;
+    receiverName: string;
+    startedAt: string;
+  } | null>(() => {
+    try {
+      const saved = localStorage.getItem("wh_active_container");
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  // Staged receiving parts saved temporarily in the red highlight area
+  const [stagedItems, setStagedItems] = useState<{
+    id: string;
+    code: string;
+    partName: string;
+    desc: string;
+    model: string;
+    batchNo: string;
+    qty: number;
+    loc: string;
+    ref: string;
+    time: string;
+  }[]>(() => {
+    try {
+      const saved = localStorage.getItem("wh_staged_receiving_items");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  // Popup window for Container No & Batch No - ONLY opens when user clicks "New Container" button
+  const [isContainerModalOpen, setIsContainerModalOpen] = useState(false);
+  const [modalContainer, setModalContainer] = useState("");
+  const [modalBatch, setModalBatch] = useState("");
+  const [modalDoRef, setModalDoRef] = useState("");
+  const [modalReceiver, setModalReceiver] = useState(
+    role === "Admin" ? "System Administrator" : role === "Manager" ? "Warehouse Manager" : "Floor Operator (WH001)"
+  );
+  const [modalError, setModalError] = useState("");
+
+  // Edit item in temporary staging modal
+  const [editingStagedId, setEditingStagedId] = useState<string | null>(null);
+  const [editQty, setEditQty] = useState<number | "">("");
+  const [editLoc, setEditLoc] = useState("");
+
+  // Key-in form inputs for current container
   const [codeQuery, setCodeQuery] = useState("");
   const [qty, setQty] = useState<number | "">("");
   const [loc, setLoc] = useState("A-01-01");
@@ -1682,254 +1840,848 @@ function ReceivingView({
   const [receiverName, setReceiverName] = useState(
     role === "Admin" ? "System Administrator" : role === "Manager" ? "Warehouse Manager" : "Floor Operator (WH001)"
   );
-  const [notice, setNotice] = useState<{ msg: string; type: "success" | "error" } | null>(null);
+  const [notice, setNotice] = useState<{ msg: string; type: "success" | "error" | "info" } | null>(null);
+
+  // Sync active container and staging to localStorage
+  useEffect(() => {
+    if (activeContainer) {
+      localStorage.setItem("wh_active_container", JSON.stringify(activeContainer));
+    } else {
+      localStorage.removeItem("wh_active_container");
+    }
+  }, [activeContainer]);
+
+  useEffect(() => {
+    localStorage.setItem("wh_staged_receiving_items", JSON.stringify(stagedItems));
+  }, [stagedItems]);
+
+  // Open modal only on clicking "New Container" button
+  const openNewContainerModal = () => {
+    setModalContainer("");
+    setModalBatch("");
+    setModalDoRef("");
+    setModalError("");
+    setModalReceiver(
+      role === "Admin" ? "System Administrator" : role === "Manager" ? "Warehouse Manager" : "Floor Operator (WH001)"
+    );
+    setIsContainerModalOpen(true);
+  };
+
+  const handleStartContainer = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!modalContainer.trim() || !modalBatch.trim()) {
+      setModalError("Please enter both Container No and Batch No / Lot.");
+      return;
+    }
+
+    const newContainer = {
+      containerNo: modalContainer.trim().toUpperCase(),
+      batchNo: modalBatch.trim().toUpperCase(),
+      doRef: modalDoRef.trim() || undefined,
+      receiverName: modalReceiver.trim() || (role === "Admin" ? "System Administrator" : "Floor Operator"),
+      startedAt: new Date().toLocaleTimeString(),
+    };
+
+    setActiveContainer(newContainer);
+    setBatchNo(newContainer.batchNo);
+    setReceiverName(newContainer.receiverName);
+    if (newContainer.doRef) setRef(newContainer.doRef);
+    setIsContainerModalOpen(false);
+    setModalError("");
+    setNotice({
+      msg: `Container ${newContainer.containerNo} is active. You can now add receiving parts below. All parts will be held in the temporary red staging area until you confirm.`,
+      type: "info",
+    });
+  };
 
   const matchedItem = items.find(
     (i) => i.active && i.code.toLowerCase() === codeQuery.trim().toLowerCase()
   );
 
-  const handleReceive = (e: React.FormEvent) => {
+  // Key-in receiving part for current container: temporarily saves in red highlight area
+  const handleAddPartToStaging = (e: React.FormEvent) => {
     e.preventDefault();
     setNotice(null);
+
+    if (!activeContainer) {
+      setNotice({
+        msg: "Please click 'New Container' first to enter Container No and Batch No / Lot.",
+        type: "error",
+      });
+      return;
+    }
+
     if (!matchedItem) {
       setNotice({ msg: "Part not found or inactive. Please check the Part No.", type: "error" });
       return;
     }
+
     const qNum = Number(qty);
     if (!(qNum > 0 && Number.isFinite(qNum))) {
       setNotice({ msg: "Please enter a valid quantity greater than zero.", type: "error" });
       return;
     }
+
     const finalLoc = loc.trim() || "A-01-01";
-    const id = txNo("RCV");
-    setBalances(upsertBalance(balances, matchedItem.code, finalLoc, qNum));
-    const finalReceiver = receiverName.trim() || (role === "Admin" ? "System Administrator" : "Floor Operator");
-    const newTx: Transaction = {
-      id,
-      type: "Receiving",
+    const finalBatch = batchNo.trim() || activeContainer.batchNo;
+    const finalRef = ref.trim() || activeContainer.doRef || "—";
+
+    const newStagedItem = {
+      id: `STG-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
       code: matchedItem.code,
       partName: matchedItem.desc,
       desc: matchedItem.desc,
-      batchNo: batchNo.trim() || undefined,
+      model: matchedItem.model,
+      batchNo: finalBatch,
       qty: qNum,
-      source: "Supplier",
-      dest: finalLoc,
-      ref: ref.trim() || "—",
-      user: role === "Admin" ? "ADMIN-DEMO" : role === "Manager" ? "MGR-DEMO" : "WH001",
-      receiverName: finalReceiver,
-      unpacked: false,
+      loc: finalLoc,
+      ref: finalRef,
       time: new Date().toLocaleString(),
-      status: "Posted",
     };
-    setTransactions([newTx, ...transactions]);
+
+    // Temporarily save to red highlight staging area (DOES NOT CHANGE INVENTORY YET)
+    setStagedItems((prev) => [...prev, newStagedItem]);
+
     setNotice({
-      msg: `Successfully posted receipt ${id} by ${finalReceiver} (Batch: ${batchNo || "N/A"}). Total stock for ${matchedItem.code}: ${stock(matchedItem.code) + qNum}.`,
+      msg: `✓ Part ${matchedItem.code} (+${qNum.toLocaleString()}) saved to temporary red area.`,
       type: "success",
     });
+
+    // Reset part & qty for next entry
     setCodeQuery("");
-    setBatchNo("");
     setQty("");
-    setRef("");
   };
+
+  // Remove staged part from temporary area (inventory unaffected)
+  const handleRemoveStagedItem = (id: string) => {
+    setStagedItems((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  // Open edit modal for staged item
+  const openEditStaged = (item: { id: string; qty: number; loc: string }) => {
+    setEditingStagedId(item.id);
+    setEditQty(item.qty);
+    setEditLoc(item.loc);
+  };
+
+  const handleSaveEditStaged = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingStagedId) return;
+    const qNum = Number(editQty);
+    if (!(qNum > 0 && Number.isFinite(qNum))) return;
+
+    // Update in staging only (Request 3: does not change inventory that already keyin)
+    setStagedItems((prev) =>
+      prev.map((item) =>
+        item.id === editingStagedId
+          ? { ...item, qty: qNum, loc: editLoc.trim() || item.loc }
+          : item
+      )
+    );
+    setEditingStagedId(null);
+  };
+
+  // Complete container: user checks temporary red area and confirms -> parts sent to inventory
+  const handleConfirmAndCompleteContainer = () => {
+    if (!activeContainer) return;
+    if (stagedItems.length === 0) {
+      setNotice({
+        msg: "The temporary staging area is empty. Please add at least one part before confirming.",
+        type: "error",
+      });
+      return;
+    }
+
+    const receiptTimestamp = new Date().toLocaleString();
+
+    // 1. Send all parts to warehouse inventory balances with receipt timestamp
+    let updatedBalances = [...balances];
+    for (const item of stagedItems) {
+      updatedBalances = upsertBalance(
+        updatedBalances,
+        item.code,
+        item.loc,
+        item.qty,
+        item.batchNo,
+        receiptTimestamp
+      );
+    }
+    setBalances(updatedBalances);
+
+    // 2. Post official transaction logs
+    const newTransactions: Transaction[] = stagedItems.map((item) => ({
+      id: txNo("RCV"),
+      type: "Receiving",
+      code: item.code,
+      partName: item.partName,
+      desc: item.desc,
+      batchNo: item.batchNo,
+      containerNo: activeContainer.containerNo,
+      qty: item.qty,
+      source: "Supplier",
+      dest: item.loc,
+      ref: item.ref,
+      user: role === "Admin" ? "ADMIN-DEMO" : role === "Manager" ? "MGR-DEMO" : "WH001",
+      receiverName: activeContainer.receiverName,
+      unpacked: false,
+      time: receiptTimestamp,
+      status: "Posted",
+    }));
+
+    setTransactions([...newTransactions, ...transactions]);
+
+    const completedContainerNo = activeContainer.containerNo;
+    const totalUnits = stagedItems.reduce((sum, item) => sum + item.qty, 0);
+    const countParts = stagedItems.length;
+
+    // 3. Clear temporary red area and active container
+    setStagedItems([]);
+    setActiveContainer(null);
+    localStorage.removeItem("wh_active_container");
+    localStorage.removeItem("wh_staged_receiving_items");
+
+    setNotice({
+      msg: `🎉 Container ${completedContainerNo} is completely received! ${countParts} parts (${totalUnits.toLocaleString()} units) have been officially sent to warehouse inventory.`,
+      type: "success",
+    });
+  };
+
+  const handleDiscardContainer = () => {
+    if (!activeContainer) return;
+    if (
+      stagedItems.length > 0 &&
+      !window.confirm(
+        `Are you sure you want to discard container ${activeContainer.containerNo} and clear the ${stagedItems.length} temporary receiving parts?`
+      )
+    ) {
+      return;
+    }
+    setStagedItems([]);
+    setActiveContainer(null);
+    localStorage.removeItem("wh_active_container");
+    localStorage.removeItem("wh_staged_receiving_items");
+    setNotice({
+      msg: "Temporary container receiving session was discarded. Warehouse inventory was not changed.",
+      type: "info",
+    });
+  };
+
+  const totalStagedQty = stagedItems.reduce((sum, item) => sum + item.qty, 0);
+  const editingItem = stagedItems.find((i) => i.id === editingStagedId);
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-          <h2 className="text-2xl font-bold text-[#18324d]">Stock Receiving</h2>
-          <p className="text-sm text-[#65768a]">Record inbound supplier shipments with receiver names into designated warehouse locations.</p>
-        </div>
-        <div className="flex items-center gap-2">
-          {setPage && (
-            <button
-              onClick={() => setPage("reports")}
-              className="flex items-center gap-2 px-3 py-1.5 bg-white border border-[#cfd9e4] text-[#18324d] rounded-xl text-xs font-semibold hover:bg-gray-50 transition shadow-xs"
-            >
-              <FileSpreadsheet size={14} className="text-emerald-700" /> Daily Incoming Report
-            </button>
-          )}
-          <span className="px-3 py-1 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-full text-xs font-bold">
-            Inbound movement
-          </span>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white border border-[#dfe6ee] rounded-2xl p-6 shadow-xs">
-          <h3 className="text-base font-semibold text-[#18324d] mb-4">Receiving Details</h3>
-
-          {notice && (
-            <div
-              className={`p-3 rounded-xl text-xs mb-4 ${
-                notice.type === "success"
-                  ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
-                  : "bg-red-50 text-red-700 border border-red-200"
-              }`}
-            >
-              {notice.msg}
-            </div>
-          )}
-
-          <form onSubmit={handleReceive} className="space-y-4">
-            <div>
-              <label className="block text-xs font-semibold text-[#42566c] mb-1">Enter Part No *</label>
-              <input
-                type="text"
-                list="activeItems"
-                value={codeQuery}
-                onChange={(e) => setCodeQuery(e.target.value)}
-                required
-                placeholder="Enter part no..."
-                className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono"
-              />
-              <datalist id="activeItems">
-                {items
-                  .filter((i) => i.active)
-                  .map((i) => (
-                    <option key={i.code} value={i.code}>
-                      {i.desc}
-                    </option>
-                  ))}
-              </datalist>
+      {/* POPUP WINDOW FOR CONTAINER NO & BATCH NO - ONLY OPENS ON CLICKING "NEW CONTAINER" BUTTON */}
+      {isContainerModalOpen && (
+        <div className="fixed inset-0 bg-[#07182b]/65 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-200 border border-[#dfe6ee]">
+            <div className="flex items-center justify-between border-b pb-3">
+              <div className="flex items-center gap-2 text-[#18324d]">
+                <Box size={22} className="text-[#2463a6]" />
+                <div>
+                  <h3 className="text-base font-bold text-[#18324d]">New Container Receiving</h3>
+                  <p className="text-[11px] text-[#65768a]">Key in container & batch details to start</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsContainerModalOpen(false)}
+                className="text-gray-400 hover:text-gray-700 p-1 rounded-lg transition"
+              >
+                <X size={18} />
+              </button>
             </div>
 
-            {codeQuery && (
-              <div>
-                {matchedItem ? (
-                  <div className="space-y-3">
-                    <div className="p-3 bg-emerald-50/50 border border-emerald-200 rounded-xl text-xs space-y-1">
-                      <div className="font-bold text-emerald-900">{matchedItem.desc}</div>
-                      <div className="text-emerald-700 font-mono">
-                        {matchedItem.code} · On Hand: {stock(matchedItem.code)}
-                      </div>
-                    </div>
+            <p className="text-xs text-[#65768a] leading-relaxed">
+              Enter <strong>Container No</strong> and <strong>Batch No / Lot</strong>. Once submitted, you can start keying in parts which will temporarily save in the red highlight area for checking.
+            </p>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs font-semibold text-[#42566c] mb-1">Part Name</label>
-                        <input
-                          type="text"
-                          readOnly
-                          value={matchedItem.desc}
-                          className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm bg-gray-50 text-[#18324d] font-medium"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-semibold text-[#42566c] mb-1">Batch No / Lot No *</label>
-                        <input
-                          type="text"
-                          value={batchNo}
-                          onChange={(e) => setBatchNo(e.target.value)}
-                          required
-                          placeholder="e.g. BATCH-202610-01"
-                          className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono bg-white"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs">
-                    Part not found in active master.
-                  </div>
-                )}
+            {modalError && (
+              <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs flex items-center gap-2">
+                <AlertCircle size={15} />
+                <span>{modalError}</span>
               </div>
             )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <form onSubmit={handleStartContainer} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-[#42566c] mb-1">Received Quantity *</label>
-                <input
-                  type="number"
-                  min="0.001"
-                  step="any"
-                  value={qty}
-                  onChange={(e) => setQty(e.target.value === "" ? "" : Number(e.target.value))}
-                  required
-                  placeholder="e.g. 50"
-                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-[#42566c] mb-1">Destination Location</label>
+                <label className="block text-xs font-semibold text-[#42566c] mb-1">Container No *</label>
                 <input
                   type="text"
-                  list="locsList"
-                  value={loc}
-                  onChange={(e) => setLoc(e.target.value)}
-                  placeholder="e.g. A-01-01 or new bay"
-                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm bg-white font-mono"
+                  value={modalContainer}
+                  onChange={(e) => setModalContainer(e.target.value)}
+                  required
+                  placeholder="e.g. CONT-88910"
+                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono bg-white uppercase"
+                  autoFocus
                 />
-                <datalist id="locsList">
-                  {allLocs().map((l) => (
-                    <option key={l} value={l} />
-                  ))}
-                </datalist>
               </div>
-            </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-semibold text-[#42566c] mb-1">
-                  Receiver Name (Person In Charge) *
-                </label>
+                <label className="block text-xs font-semibold text-[#42566c] mb-1">Batch No / Lot *</label>
                 <input
                   type="text"
-                  value={receiverName}
-                  onChange={(e) => setReceiverName(e.target.value)}
+                  value={modalBatch}
+                  onChange={(e) => setModalBatch(e.target.value)}
                   required
-                  placeholder="e.g. Ahmad Zaki / Tan Wei Lun"
+                  placeholder="e.g. LOT-202610-A"
+                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono bg-white uppercase"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-[#42566c] mb-1">Receiver Name (PIC) *</label>
+                <input
+                  type="text"
+                  value={modalReceiver}
+                  onChange={(e) => setModalReceiver(e.target.value)}
+                  required
+                  placeholder="e.g. Ahmad Zaki"
                   className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm bg-white"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-[#42566c] mb-1">
-                  Delivery Order / Supplier Reference
-                </label>
+                <label className="block text-xs font-semibold text-[#42566c] mb-1">DO / Supplier Ref (Optional)</label>
                 <input
                   type="text"
-                  value={ref}
-                  onChange={(e) => setRef(e.target.value)}
-                  placeholder="e.g. DO-8021"
-                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono"
+                  value={modalDoRef}
+                  onChange={(e) => setModalDoRef(e.target.value)}
+                  placeholder="e.g. DO-9021"
+                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono bg-white"
                 />
               </div>
-            </div>
 
+              <div className="flex gap-2 pt-2 border-t border-[#dfe6ee]">
+                <button
+                  type="button"
+                  onClick={() => setIsContainerModalOpen(false)}
+                  className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl text-xs font-semibold transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2.5 bg-[#2463a6] hover:bg-[#1d528a] text-white rounded-xl text-xs font-bold shadow-sm transition flex items-center justify-center gap-1.5"
+                >
+                  Submit & Start Container Receiving →
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* EDIT STAGED ITEM MODAL (Changes staging only, does not touch real inventory) */}
+      {editingItem && (
+        <div className="fixed inset-0 bg-[#07182b]/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-4 border border-[#dfe6ee]">
+            <div className="flex items-center justify-between border-b pb-2">
+              <h3 className="text-sm font-bold text-[#18324d]">Edit Temporary Staged Part</h3>
+              <button onClick={() => setEditingStagedId(null)} className="text-gray-400 hover:text-gray-700">
+                <X size={16} />
+              </button>
+            </div>
+            <div className="text-xs text-[#42566c]">
+              <div className="font-mono font-bold text-[#2463a6]">{editingItem.code}</div>
+              <div>{editingItem.desc}</div>
+            </div>
+            <form onSubmit={handleSaveEditStaged} className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-[#42566c] mb-1">Quantity</label>
+                <input
+                  type="number"
+                  min="0.001"
+                  step="any"
+                  value={editQty}
+                  onChange={(e) => setEditQty(e.target.value === "" ? "" : Number(e.target.value))}
+                  required
+                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-[#42566c] mb-1">Destination Bay</label>
+                <input
+                  type="text"
+                  list="allLocsEdit"
+                  value={editLoc}
+                  onChange={(e) => setEditLoc(e.target.value)}
+                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono"
+                />
+                <datalist id="allLocsEdit">
+                  {allLocs().map((l) => (
+                    <option key={l} value={l} />
+                  ))}
+                </datalist>
+              </div>
+              <div className="flex justify-end gap-2 pt-2 border-t">
+                <button
+                  type="button"
+                  onClick={() => setEditingStagedId(null)}
+                  className="px-3 py-1.5 border border-[#cfd9e4] rounded-xl text-xs font-semibold text-[#42566c]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-1.5 bg-[#2463a6] hover:bg-[#1d528a] text-white rounded-xl text-xs font-bold"
+                >
+                  Update Staging
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* TOP HEADER BAR */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+          <h2 className="text-2xl font-bold text-[#18324d]">Stock Receiving</h2>
+          <p className="text-sm text-[#65768a]">
+            Inbound container receiving workflow: start container, key in parts into temporary staging, then confirm to inventory.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={openNewContainerModal}
+            className="flex items-center gap-1.5 px-4 py-2 bg-[#2463a6] text-white rounded-xl text-xs font-bold hover:bg-[#1d528a] transition shadow-xs"
+          >
+            <Plus size={16} /> New Container
+          </button>
+          {setPage && (
             <button
-              type="submit"
-              className="w-full py-3 bg-[#2463a6] text-white rounded-xl text-xs font-semibold hover:opacity-95 shadow-xs transition"
+              onClick={() => setPage("reports")}
+              className="flex items-center gap-2 px-3 py-2 bg-white border border-[#cfd9e4] text-[#18324d] rounded-xl text-xs font-semibold hover:bg-gray-50 transition shadow-xs"
             >
-              ✓ Confirm & Post Receipt
+              <FileSpreadsheet size={14} className="text-emerald-700" /> Daily Incoming Report
             </button>
-          </form>
+          )}
+        </div>
+      </div>
+
+      {/* ACTIVE CONTAINER STATUS BAR */}
+      {activeContainer ? (
+        <div className="p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl flex flex-col md:flex-row justify-between items-start md:items-center gap-3 shadow-xs">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-blue-600 text-white rounded-xl shadow-xs">
+              <Boxes size={22} />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-blue-900">Current Active Container</span>
+                <span className="px-2 py-0.5 bg-blue-100 text-blue-800 rounded-full text-[10px] font-bold">
+                  Receiving In-Progress
+                </span>
+              </div>
+              <div className="text-sm font-bold font-mono text-[#18324d] mt-0.5 flex flex-wrap items-center gap-x-4 gap-y-1">
+                <span>
+                  Container: <strong className="text-blue-700">{activeContainer.containerNo}</strong>
+                </span>
+                <span>
+                  Batch/Lot: <strong className="text-emerald-700">{activeContainer.batchNo}</strong>
+                </span>
+                <span className="text-xs text-[#65768a] font-sans">
+                  Receiver: <strong className="text-[#18324d]">{activeContainer.receiverName}</strong>
+                </span>
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleDiscardContainer}
+              className="px-3 py-1.5 bg-white border border-red-300 text-red-700 hover:bg-red-50 rounded-xl text-xs font-semibold transition"
+            >
+              Discard Container
+            </button>
+            <button
+              onClick={openNewContainerModal}
+              className="px-3.5 py-1.5 bg-[#2463a6] text-white rounded-xl text-xs font-semibold hover:bg-[#1d528a] transition shadow-xs flex items-center gap-1.5"
+            >
+              <Plus size={14} /> New Container
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="p-4 bg-amber-50/70 border border-amber-200 rounded-2xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-amber-200 text-amber-900 rounded-xl">
+              <Box size={22} />
+            </div>
+            <div>
+              <div className="text-xs font-bold text-amber-900 uppercase tracking-wider">No Container Active</div>
+              <div className="text-xs text-amber-800">
+                Please click <strong>"New Container"</strong> to enter Container No and Batch No / Lot before keying in receiving parts.
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={openNewContainerModal}
+            className="px-4 py-2 bg-[#2463a6] hover:bg-[#1d528a] text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs"
+          >
+            <Plus size={14} /> New Container
+          </button>
+        </div>
+      )}
+
+      {notice && (
+        <div
+          className={`p-3.5 rounded-xl text-xs flex items-center justify-between ${
+            notice.type === "success"
+              ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
+              : notice.type === "error"
+              ? "bg-red-50 text-red-700 border border-red-200"
+              : "bg-blue-50 text-blue-800 border border-blue-200"
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {notice.type === "success" && <Check size={16} className="text-emerald-600" />}
+            {notice.type === "error" && <AlertCircle size={16} className="text-red-600" />}
+            {notice.type === "info" && <Boxes size={16} className="text-blue-600" />}
+            <span>{notice.msg}</span>
+          </div>
+          <button onClick={() => setNotice(null)} className="font-bold px-1 hover:opacity-75">✕</button>
+        </div>
+      )}
+
+      {/* TWO COLUMN GRID: KEY-IN FORM ON LEFT, GUIDELINES/RECENT ON RIGHT */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* KEY-IN RECEIVING DETAILS FORM */}
+        <div className="bg-white border border-[#dfe6ee] rounded-2xl p-6 shadow-xs space-y-4">
+          <div className="flex items-center justify-between border-b pb-3">
+            <div>
+              <h3 className="text-base font-bold text-[#18324d]">Key In Receiving Parts</h3>
+              <p className="text-xs text-[#65768a]">
+                {activeContainer
+                  ? `Active for Container: ${activeContainer.containerNo} (Batch: ${activeContainer.batchNo})`
+                  : "Start a container first to enable receiving"}
+              </p>
+            </div>
+            {activeContainer && (
+              <span className="px-2.5 py-1 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-full text-[11px] font-bold">
+                Ready to Key In
+              </span>
+            )}
+          </div>
+
+          {!activeContainer ? (
+            <div className="p-8 text-center bg-gray-50 rounded-xl border border-dashed border-[#cfd9e4] space-y-3">
+              <Box size={32} className="mx-auto text-gray-400" />
+              <div className="text-sm font-semibold text-[#18324d]">Container Setup Required</div>
+              <p className="text-xs text-[#65768a] max-w-sm mx-auto">
+                Before adding receiving details, click the <strong>"New Container"</strong> button to enter the Container No and Batch No / Lot for this inbound shipment.
+              </p>
+              <button
+                type="button"
+                onClick={openNewContainerModal}
+                className="px-4 py-2 bg-[#2463a6] hover:bg-[#1d528a] text-white rounded-xl text-xs font-bold shadow-xs transition inline-flex items-center gap-1.5"
+              >
+                <Plus size={14} /> Open New Container Popup
+              </button>
+            </div>
+          ) : (
+            <form onSubmit={handleAddPartToStaging} className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between text-xs bg-blue-50/80 p-2.5 rounded-xl border border-blue-200 text-[#18324d]">
+                <div>Container: <strong className="font-mono text-blue-900">{activeContainer.containerNo}</strong></div>
+                <div>Batch: <strong className="font-mono text-emerald-800">{activeContainer.batchNo}</strong></div>
+                <div>Receiver: <strong className="text-blue-950 font-semibold">{activeContainer.receiverName}</strong></div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-[#42566c] mb-1">Enter Part No *</label>
+                <input
+                  type="text"
+                  list="activeMasterItems"
+                  value={codeQuery}
+                  onChange={(e) => setCodeQuery(e.target.value)}
+                  required
+                  placeholder="Type or select Part No..."
+                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono uppercase bg-white"
+                />
+                <datalist id="activeMasterItems">
+                  {items
+                    .filter((i) => i.active)
+                    .map((i) => (
+                      <option key={i.code} value={i.code}>
+                        {i.desc} ({i.model})
+                      </option>
+                    ))}
+                </datalist>
+              </div>
+
+              {codeQuery && (
+                <div>
+                  {matchedItem ? (
+                    <div className="p-3 bg-emerald-50/60 border border-emerald-200 rounded-xl text-xs space-y-1 animate-in fade-in">
+                      <div className="font-bold text-emerald-950 flex justify-between">
+                        <span>{matchedItem.desc}</span>
+                        <span className="font-mono text-emerald-800">{matchedItem.model}</span>
+                      </div>
+                      <div className="text-emerald-700 font-mono text-[11px]">
+                        Part No: {matchedItem.code} · Current On-Hand: <strong>{stock(matchedItem.code)} units</strong>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs">
+                      Part No not found in active master catalog.
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-[#42566c] mb-1">Received Quantity *</label>
+                  <input
+                    type="number"
+                    min="0.001"
+                    step="any"
+                    value={qty}
+                    onChange={(e) => setQty(e.target.value === "" ? "" : Number(e.target.value))}
+                    required
+                    placeholder="e.g. 100"
+                    className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-[#42566c] mb-1">Destination Location / Bay</label>
+                  <input
+                    type="text"
+                    list="locsReceivingList"
+                    value={loc}
+                    onChange={(e) => setLoc(e.target.value)}
+                    placeholder="e.g. A-01-01 or RECV-01"
+                    className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm bg-white font-mono"
+                  />
+                  <datalist id="locsReceivingList">
+                    {allLocs().map((l) => (
+                      <option key={l} value={l} />
+                    ))}
+                  </datalist>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-[#42566c] mb-1">Batch No / Lot No *</label>
+                  <input
+                    type="text"
+                    value={batchNo}
+                    onChange={(e) => setBatchNo(e.target.value)}
+                    required
+                    placeholder="e.g. LOT-202610-01"
+                    className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono bg-white uppercase"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-[#42566c] mb-1">DO / Supplier Reference</label>
+                  <input
+                    type="text"
+                    value={ref}
+                    onChange={(e) => setRef(e.target.value)}
+                    placeholder="e.g. DO-8802"
+                    className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono"
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                className="w-full py-3 bg-[#2463a6] hover:bg-[#1d528a] text-white rounded-xl text-xs font-bold shadow-xs transition flex items-center justify-center gap-2"
+              >
+                <Plus size={16} /> Add Part to Container (Temporary Red Area)
+              </button>
+            </form>
+          )}
         </div>
 
+        {/* RIGHT SIDE: RECEIVING GUIDELINES & RECENT RECEIPTS */}
         <div className="space-y-6">
           <div className="bg-white border border-[#dfe6ee] rounded-2xl p-6 shadow-xs">
-            <h3 className="text-base font-semibold text-[#18324d] mb-3">Receiving Guidelines</h3>
+            <h3 className="text-base font-semibold text-[#18324d] mb-3">Receiving Workflow Notice</h3>
             <div className="p-4 bg-[#f4f7fb] rounded-xl space-y-2 text-xs text-[#42566c]">
               <div className="flex justify-between">
-                <span>Transaction Type</span>
-                <strong className="text-[#18324d]">Receiving</strong>
+                <span>1. New Container Setup</span>
+                <strong className="text-[#18324d]">Popup via button</strong>
               </div>
               <div className="flex justify-between">
-                <span>Stock Logic</span>
-                <strong className="text-[#18324d]">Previous Qty + Received Qty</strong>
+                <span>2. Key-In Stage</span>
+                <strong className="text-red-700 font-semibold">Saved in Red Area (Staging)</strong>
               </div>
               <div className="flex justify-between">
-                <span>Verification</span>
-                <strong className="text-[#18324d]">Active Part No Required</strong>
+                <span>3. Check & Confirm</span>
+                <strong className="text-emerald-700 font-semibold">Sent to Inventory</strong>
               </div>
             </div>
             <p className="text-xs text-[#65768a] mt-3 leading-relaxed">
-              Inactive or unregistered part numbers cannot be received. Warehouse users must contact the administrator to create new master records.
+              Parts keyed in are temporarily staged in the red highlight area below. You can inspect or edit quantities before final confirmation. Inventory is only credited upon clicking <strong>Confirm & Complete Container</strong>.
             </p>
           </div>
 
           <div className="bg-white border border-[#dfe6ee] rounded-2xl p-6 shadow-xs">
-            <h3 className="text-base font-semibold text-[#18324d] mb-4">Recent Receipts</h3>
+            <h3 className="text-base font-semibold text-[#18324d] mb-3">Recently Received Shipments</h3>
             <TxTable transactions={transactions.filter((t) => t.type === "Receiving").slice(0, 4)} />
+          </div>
+        </div>
+      </div>
+
+      {/* THE RED HIGHLIGHT AREA (Request 6: Temporary staging for current container receiving) */}
+      <div className="border-2 border-red-500 rounded-2xl bg-gradient-to-b from-red-50/90 via-red-50/40 to-white p-6 shadow-md space-y-5">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3 border-b border-red-200 pb-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-red-600 text-white rounded-xl shadow-xs">
+              <Box size={24} />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-lg font-bold text-red-950 uppercase tracking-wide">
+                  Temporary Container Receiving Area
+                </h3>
+                <span className="px-2.5 py-0.5 bg-red-600 text-white rounded-full text-[10px] font-extrabold uppercase tracking-wider animate-pulse">
+                  Red Highlight Staging
+                </span>
+              </div>
+              <p className="text-xs text-red-900 mt-0.5">
+                All parts added for this container are temporarily saved here and <strong>NOT yet sent to inventory</strong>. Check and confirm below when complete.
+              </p>
+            </div>
+          </div>
+
+          {activeContainer && (
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="px-3 py-1.5 bg-white border border-red-200 rounded-xl text-xs font-mono font-bold text-red-900">
+                Container: {activeContainer.containerNo}
+              </div>
+              <div className="px-3 py-1.5 bg-white border border-red-200 rounded-xl text-xs font-mono font-bold text-blue-900">
+                Batch: {activeContainer.batchNo}
+              </div>
+              <div className="px-3 py-1.5 bg-red-100 border border-red-300 rounded-xl text-xs font-bold text-red-950">
+                {stagedItems.length} parts ({totalStagedQty.toLocaleString()} units)
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* TABLE OF STAGED PARTS IN RED AREA */}
+        <div className="overflow-x-auto border border-red-300 rounded-xl bg-white shadow-xs">
+          <table className="w-full text-left border-collapse min-w-[750px]">
+            <thead>
+              <tr className="bg-red-100/70 text-red-950 text-xs font-bold border-b border-red-200">
+                <th className="p-3 w-12">#</th>
+                <th className="p-3">Time Stamp</th>
+                <th className="p-3">Part No</th>
+                <th className="p-3">Description</th>
+                <th className="p-3">Model</th>
+                <th className="p-3">Batch No</th>
+                <th className="p-3 text-red-800 font-extrabold">Received Qty</th>
+                <th className="p-3">Target Bay</th>
+                <th className="p-3">DO Reference</th>
+                <th className="p-3 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-red-100 text-xs">
+              {stagedItems.length === 0 ? (
+                <tr>
+                  <td colSpan={10} className="text-center py-8 text-red-800/80 bg-red-50/30">
+                    <div className="font-semibold text-sm text-red-900">
+                      {activeContainer
+                        ? `No parts added to Container ${activeContainer.containerNo} yet.`
+                        : "No active container session."}
+                    </div>
+                    <div className="text-xs text-red-700 mt-1">
+                      {activeContainer
+                        ? "Key in the part number and quantity above, then click '+ Add Part to Container' to stage items here."
+                        : "Click '+ New Container' above to open the popup and start receiving."}
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                stagedItems.map((item, idx) => (
+                  <tr key={item.id} className="hover:bg-red-50/50 transition">
+                    <td className="p-3 font-mono font-semibold text-gray-500">{idx + 1}</td>
+                    <td className="p-3 font-mono text-[#65768a] text-[11px] whitespace-nowrap">
+                      <span className="inline-flex items-center gap-1 bg-white px-2 py-0.5 rounded border border-red-200">
+                        <Clock size={12} className="text-red-500" />
+                        {item.time}
+                      </span>
+                    </td>
+                    <td className="p-3 font-mono font-bold text-[#18324d]">{item.code}</td>
+                    <td className="p-3 font-medium text-[#18324d] max-w-[200px] truncate" title={item.desc}>
+                      {item.desc}
+                    </td>
+                    <td className="p-3 font-medium text-[#65768a]">{item.model || "—"}</td>
+                    <td className="p-3 font-mono">
+                      <span className="inline-block px-2 py-0.5 bg-blue-50 text-blue-800 rounded font-semibold border border-blue-200 text-[11px]">
+                        {item.batchNo}
+                      </span>
+                    </td>
+                    <td className="p-3 font-mono font-bold text-red-700 text-sm">
+                      +{item.qty.toLocaleString()}
+                    </td>
+                    <td className="p-3 font-mono text-[#42566c]">{item.loc}</td>
+                    <td className="p-3 font-mono text-[#65768a]">{item.ref}</td>
+                    <td className="p-3 text-right">
+                      <div className="flex items-center justify-end gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => openEditStaged(item)}
+                          className="px-2 py-1 bg-white border border-gray-300 hover:bg-gray-50 rounded-lg text-[11px] font-semibold text-gray-700 flex items-center gap-1 shadow-2xs"
+                          title="Edit quantity or location before confirming"
+                        >
+                          <Edit2 size={12} /> Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveStagedItem(item.id)}
+                          className="px-2 py-1 bg-red-100 hover:bg-red-200 border border-red-300 rounded-lg text-[11px] font-semibold text-red-800 flex items-center gap-1 transition"
+                          title="Remove from temporary staging"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* CHECK & CONFIRMATION FOOTER SECTION */}
+        <div className="p-4 bg-white border border-red-300 rounded-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shadow-xs">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 text-red-900 font-bold text-xs uppercase tracking-wide">
+              <CheckCircle2 size={16} className="text-red-600" />
+              <span>Checking & Final Confirmation</span>
+            </div>
+            <p className="text-xs text-[#42566c] leading-relaxed max-w-xl">
+              User must check the temporary red area above. Once verified, click <strong>"Confirm & Complete Container"</strong> to mark the container complete and officially send all receiving parts to warehouse inventory balance.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-end">
+            {activeContainer && (
+              <button
+                type="button"
+                onClick={handleDiscardContainer}
+                className="px-4 py-2.5 border border-red-300 text-red-700 hover:bg-red-50 rounded-xl text-xs font-semibold transition"
+              >
+                Discard Staging
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleConfirmAndCompleteContainer}
+              disabled={!activeContainer || stagedItems.length === 0}
+              className={`px-6 py-2.5 rounded-xl text-xs font-bold shadow-sm transition flex items-center gap-2 ${
+                activeContainer && stagedItems.length > 0
+                  ? "bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer hover:shadow-md"
+                  : "bg-gray-200 text-gray-500 cursor-not-allowed border border-gray-300"
+              }`}
+            >
+              <Check size={16} /> Confirm & Complete Container (Send to Inventory)
+            </button>
           </div>
         </div>
       </div>
@@ -2620,18 +3372,23 @@ function InventoryView({
       const i = items.find((x) => x.code === b.code) || {
         desc: "Unknown part",
         min: 0,
+        model: "—",
       };
       return {
         ...b,
         desc: i.desc,
         min: i.min,
+        model: i.model,
+        timestamp: b.timestamp || b.updatedAt || "—",
       };
     })
     .filter(
       (b) =>
         b.code.toLowerCase().includes(search.toLowerCase()) ||
         b.loc.toLowerCase().includes(search.toLowerCase()) ||
-        b.desc.toLowerCase().includes(search.toLowerCase())
+        b.desc.toLowerCase().includes(search.toLowerCase()) ||
+        (b.batchNo && b.batchNo.toLowerCase().includes(search.toLowerCase())) ||
+        (b.timestamp && b.timestamp.toLowerCase().includes(search.toLowerCase()))
     );
 
   return (
@@ -2639,14 +3396,24 @@ function InventoryView({
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h2 className="text-2xl font-bold text-[#18324d]">Inventory Balance</h2>
-          <p className="text-sm text-[#65768a]">Detailed stock on hand by Part No and storage location.</p>
+          <p className="text-sm text-[#65768a]">Detailed stock on hand by Part No, batch, location and last updated timestamp.</p>
         </div>
         <button
           onClick={() =>
             downloadCSV(
               "inventory_balance.csv",
-              ["Part No", "Description", "Location", "Quantity", "Minimum Stock"],
-              rows.map((r) => [r.code, r.desc, r.loc, r.qty, r.min])
+              ["Part No", "Description", "Model", "Batch No", "Location", "Quantity", "Minimum Stock", "Timestamp / Last Updated", "Status"],
+              rows.map((r) => [
+                r.code,
+                r.desc,
+                r.model || "—",
+                r.batchNo || "—",
+                r.loc,
+                r.qty,
+                r.min,
+                r.timestamp,
+                stock(r.code) <= r.min ? "Low Stock" : "In Range"
+              ])
             )
           }
           className="flex items-center gap-2 px-3 py-2 bg-white border border-[#cfd9e4] rounded-xl text-xs font-semibold text-[#18324d] hover:bg-[#f7f9fc]"
@@ -2662,27 +3429,30 @@ function InventoryView({
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search part no, description, or location..."
+            placeholder="Search part no, description, batch, location, or timestamp..."
             className="w-full pl-10 pr-4 py-2.5 border border-[#cfd9e4] rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#2463a6]"
           />
         </div>
 
         <div className="overflow-x-auto border border-[#dfe6ee] rounded-xl">
-          <table className="w-full text-left border-collapse min-w-[760px]">
+          <table className="w-full text-left border-collapse min-w-[850px]">
             <thead>
               <tr className="bg-[#f7f9fc] text-[#5c6f83] text-xs font-bold border-b border-[#dfe6ee]">
                 <th className="p-3">Part No</th>
                 <th className="p-3">Description</th>
+                <th className="p-3">Model</th>
+                <th className="p-3">Batch No</th>
                 <th className="p-3">Storage Location</th>
                 <th className="p-3">On Hand Quantity</th>
                 <th className="p-3">Minimum Stock</th>
+                <th className="p-3">Timestamp / Last Updated</th>
                 <th className="p-3">Status</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#e9eef3] text-xs">
               {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="text-center py-8 text-[#65768a]">
+                  <td colSpan={9} className="text-center py-8 text-[#65768a]">
                     No inventory balances found.
                   </td>
                 </tr>
@@ -2694,11 +3464,27 @@ function InventoryView({
                     <tr key={idx} className="hover:bg-[#fcfdfd]">
                       <td className="p-3 font-bold font-mono text-[#18324d]">{b.code}</td>
                       <td className="p-3 font-medium text-[#18324d]">{b.desc}</td>
+                      <td className="p-3 text-[#65768a] text-xs">{b.model || "—"}</td>
+                      <td className="p-3 font-mono">
+                        {b.batchNo ? (
+                          <span className="inline-block px-2 py-0.5 bg-blue-50 text-blue-800 rounded font-semibold border border-blue-200 text-[11px]">
+                            {b.batchNo}
+                          </span>
+                        ) : (
+                          <span className="text-[#a0aec0] text-xs">—</span>
+                        )}
+                      </td>
                       <td className="p-3 font-mono font-bold text-[#2463a6]">{b.loc}</td>
                       <td className="p-3 font-mono font-bold text-[#18324d]">
                         {b.qty.toLocaleString()}
                       </td>
                       <td className="p-3 font-mono text-[#65768a]">{b.min}</td>
+                      <td className="p-3 font-mono text-[#42566c] text-[11px] whitespace-nowrap">
+                        <span className="inline-flex items-center gap-1.5 bg-gray-50 px-2 py-1 rounded-md border border-gray-200">
+                          <Clock size={12} className="text-gray-500" />
+                          {b.timestamp}
+                        </span>
+                      </td>
                       <td className="p-3">
                         <span
                           className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold ${

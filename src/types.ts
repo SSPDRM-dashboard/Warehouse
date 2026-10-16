@@ -35,6 +35,8 @@ export interface Balance {
   loc: string;
   qty: number;
   batchNo?: string; // Batch No
+  timestamp?: string; // Last updated timestamp
+  updatedAt?: string; // Timestamp
 }
 
 export type Transaction = {
@@ -54,6 +56,7 @@ export type Transaction = {
   partName?: string; // Part Name
   desc?: string; // Description
   batchNo?: string; // Batch No / Lot No
+  containerNo?: string; // Container No
   qty: number;
   source: string;
   dest: string;

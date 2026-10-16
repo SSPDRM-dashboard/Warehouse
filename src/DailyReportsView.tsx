@@ -117,6 +117,7 @@ export function DailyReportsView({
       "Timestamp",
       "Part No",
       "Part Name",
+      "Container No",
       "Batch No",
       "Model",
       "Quantity Received",
@@ -133,6 +134,7 @@ export function DailyReportsView({
       t.time,
       t.code,
       t.partName || t.desc || "",
+      t.containerNo || "—",
       t.batchNo || "—",
       getItemModel(t.code),
       t.qty,
@@ -490,6 +492,7 @@ export function DailyReportsView({
                     <th className="p-3">Time</th>
                     <th className="p-3">Part No</th>
                     <th className="p-3">Part Name</th>
+                    <th className="p-3">Container No</th>
                     <th className="p-3">Batch No</th>
                     <th className="p-3">Qty Received</th>
                     <th className="p-3">Destination Bin</th>
@@ -502,7 +505,7 @@ export function DailyReportsView({
                 <tbody className="divide-y divide-[#e9eef3] text-xs">
                   {applySearch(incomingTx).length === 0 ? (
                     <tr>
-                      <td colSpan={11} className="text-center py-6 text-[#65768a]">
+                      <td colSpan={12} className="text-center py-6 text-[#65768a]">
                         No incoming receipts recorded for {selectedDate}.
                       </td>
                     </tr>
@@ -514,6 +517,15 @@ export function DailyReportsView({
                         <td className="p-3 font-mono font-bold text-[#18324d]">{t.code}</td>
                         <td className="p-3 font-medium text-[#18324d] max-w-[180px] truncate" title={t.partName || t.desc}>
                           {t.partName || t.desc || "—"}
+                        </td>
+                        <td className="p-3 font-mono font-semibold text-[#18324d]">
+                          {t.containerNo ? (
+                            <span className="inline-block px-2 py-0.5 bg-purple-50 text-purple-900 rounded font-semibold border border-purple-200 text-[11px]">
+                              {t.containerNo}
+                            </span>
+                          ) : (
+                            <span className="text-[#a0aec0] text-xs">—</span>
+                          )}
                         </td>
                         <td className="p-3 font-mono">
                           {t.batchNo ? (

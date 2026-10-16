@@ -116,17 +116,18 @@ export async function pushWarehouseStateToCloud(
     version: Date.now(),
   };
 
+  // Always save to localStorage first so local operations are never blocked
+  try {
+    localStorage.setItem("wh_items", JSON.stringify(items));
+    localStorage.setItem("wh_balances", JSON.stringify(balances));
+    localStorage.setItem("wh_transactions", JSON.stringify(transactions));
+    localStorage.setItem("wh_users", JSON.stringify(users));
+  } catch {
+    // ignore quota issues
+  }
+
   try {
     await setDoc(docRef, payload);
-    // Also update local storage
-    try {
-      localStorage.setItem("wh_items", JSON.stringify(items));
-      localStorage.setItem("wh_balances", JSON.stringify(balances));
-      localStorage.setItem("wh_transactions", JSON.stringify(transactions));
-      localStorage.setItem("wh_users", JSON.stringify(users));
-    } catch {
-      // ignore quota issues
-    }
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `${STATE_COLLECTION}/${STATE_DOC}`);
   }

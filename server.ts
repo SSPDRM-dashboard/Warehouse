@@ -57,6 +57,15 @@ Please provide a JSON response with:
       let data;
       try {
         data = JSON.parse(text);
+        if (data && Array.isArray(data.optimizationTips)) {
+          data.optimizationTips = data.optimizationTips.map((item: any) => {
+            if (typeof item === "string") return item;
+            if (typeof item === "object" && item !== null) {
+              return item.tip || item.description || item.text || JSON.stringify(item);
+            }
+            return String(item);
+          });
+        }
       } catch (err) {
         data = { rawText: text };
       }

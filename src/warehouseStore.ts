@@ -30,6 +30,49 @@ export function getDeviceInfo(): string {
   return "Desktop / Workstation";
 }
 
+/**
+ * Recursively strips all `undefined` values from an object or array.
+ * Firestore rejects documents containing `undefined` as a field value.
+ */
+export function cleanForFirestore<T>(data: T): any {
+  if (data === null || data === undefined) {
+    return null;
+  }
+
+  // 1. Convert undefined values in objects/arrays cleanly via JSON serialization
+  const jsonString = JSON.stringify(data, (_key, val) => {
+    if (typeof val === "undefined") {
+      return undefined; // in objects this omits the property
+    }
+    return val;
+  });
+
+  if (!jsonString) return null;
+  const parsed = JSON.parse(jsonString);
+
+  // 2. Deep clean arrays and objects to purge any remaining nulls or undefined values in arrays
+  function removeUndefined(obj: any): any {
+    if (obj === null || obj === undefined) return null;
+    if (Array.isArray(obj)) {
+      return obj
+        .filter((item) => item !== undefined)
+        .map((item) => removeUndefined(item));
+    }
+    if (typeof obj === "object") {
+      const res: Record<string, any> = {};
+      for (const [k, v] of Object.entries(obj)) {
+        if (v !== undefined) {
+          res[k] = removeUndefined(v);
+        }
+      }
+      return res;
+    }
+    return obj;
+  }
+
+  return removeUndefined(parsed);
+}
+
 // Subscribes to real-time warehouse data changes from Firestore
 export function subscribeToWarehouseState(
   onData: (data: WarehouseStateData) => void,
@@ -80,7 +123,7 @@ export function subscribeToWarehouseState(
             version: 1,
           };
 
-          await setDoc(docRef, initialData);
+          await setDoc(docRef, cleanForFirestore(initialData));
           onData(initialData);
         }
       } catch (err) {
@@ -127,7 +170,8 @@ export async function pushWarehouseStateToCloud(
   }
 
   try {
-    await setDoc(docRef, payload);
+    const firestoreData = cleanForFirestore(payload);
+    await setDoc(docRef, firestoreData);
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `${STATE_COLLECTION}/${STATE_DOC}`);
   }

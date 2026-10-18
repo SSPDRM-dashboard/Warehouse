@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { GoogleGenAI } from "@google/genai";
 import {
   LayoutDashboard,
@@ -32,21 +32,46 @@ import {
   Box,
   AlertCircle,
   Check,
-  Clock
+  Clock,
+  LogOut,
+  Sliders,
+  Layers,
+  Truck,
+  Wrench,
+  PackageCheck,
+  RotateCcw,
 } from "lucide-react";
-import { Item, Balance, Transaction, Role, Page, UserAccount } from "./types";
+import {
+  Item,
+  Balance,
+  Transaction,
+  Role,
+  Page,
+  UserAccount,
+  RolePermissions,
+  DEFAULT_ROLE_PERMISSIONS,
+  AVAILABLE_PANELS,
+} from "./types";
+import { defaultUsers } from "./defaultUsers";
 import { seedItems, initialBalances, initialTransactions } from "./mockData";
 import { SyncBackupModal } from "./SyncBackupModal";
 import { DailyReportsView } from "./DailyReportsView";
 import { subscribeToWarehouseState, pushWarehouseStateToCloud } from "./warehouseStore";
+import { LoginView } from "./LoginView";
+import { SettingsView } from "./SettingsView";
 
-export const defaultUsers: UserAccount[] = [
-  { id: "usr_1", username: "admin", password: "password123", name: "System Administrator", role: "Admin" },
-  { id: "usr_2", username: "manager", password: "password123", name: "Warehouse Manager", role: "Manager" },
-  { id: "usr_3", username: "operator", password: "password123", name: "Floor Operator (WH001)", role: "User" },
-];
 
 // Module-level helpers
+export const formatTimestamp = (d = new Date()) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  return `${y}-${m}-${day} ${hh}:${mm}:${ss}`;
+};
+
 const txNo = (prefix: string) =>
   `${prefix}-${new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14)}-${Math.random()
     .toString(36)
@@ -59,12 +84,13 @@ const upsertBalance = (
   loc: string,
   delta: number,
   batchNo?: string,
-  timestamp?: string
+  timestamp?: string,
+  caseNo?: string
 ) => {
   let found = false;
   const targetCode = code.trim().toUpperCase();
   const targetLoc = loc.trim();
-  const timeNow = timestamp || new Date().toLocaleString();
+  const timeNow = timestamp || formatTimestamp();
   const out = balances.map((b) => {
     if (b.code.trim().toUpperCase() === targetCode && b.loc.trim().toLowerCase() === targetLoc.toLowerCase()) {
       found = true;
@@ -72,6 +98,7 @@ const upsertBalance = (
         ...b,
         qty: Math.max(0, b.qty + delta),
         batchNo: batchNo || b.batchNo,
+        caseNo: caseNo || b.caseNo,
         timestamp: timeNow,
         updatedAt: timeNow,
       };
@@ -79,14 +106,16 @@ const upsertBalance = (
     return b;
   });
   if (!found) {
-    out.push({
+    const newBal: Balance = {
       code: targetCode,
       loc: targetLoc,
       qty: Math.max(0, delta),
-      batchNo,
       timestamp: timeNow,
       updatedAt: timeNow,
-    });
+    };
+    if (batchNo) newBal.batchNo = batchNo;
+    if (caseNo) newBal.caseNo = caseNo;
+    out.push(newBal);
   }
   return out;
 };
@@ -136,9 +165,54 @@ export default function App() {
     }
   });
 
-  const [role, setRole] = useState<Role>("Admin");
+  const [rolePermissions, setRolePermissions] = useState<RolePermissions>(() => {
+    try {
+      const saved = localStorage.getItem("wh_role_permissions");
+      if (saved) {
+        return { ...DEFAULT_ROLE_PERMISSIONS, ...JSON.parse(saved) };
+      }
+      return DEFAULT_ROLE_PERMISSIONS;
+    } catch {
+      return DEFAULT_ROLE_PERMISSIONS;
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem("wh_role_permissions", JSON.stringify(rolePermissions));
+  }, [rolePermissions]);
+
+  const [currentUser, setCurrentUser] = useState<UserAccount | null>(() => {
+    try {
+      const saved = localStorage.getItem("wh_logged_in_user");
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const [role, setRole] = useState<Role>(() => {
+    return currentUser ? currentUser.role : "Admin";
+  });
+
   const [page, setPage] = useState<Page>("dashboard");
   const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+
+  const handleLogin = (user: UserAccount) => {
+    setCurrentUser(user);
+    setRole(user.role);
+    localStorage.setItem("wh_logged_in_user", JSON.stringify(user));
+    const allowed = user.role === "Admin"
+      ? AVAILABLE_PANELS.map((p) => p.id)
+      : (rolePermissions[user.role] || DEFAULT_ROLE_PERMISSIONS[user.role] || ["dashboard"]);
+    if (!allowed.includes(page)) {
+      setPage(allowed[0] || "dashboard");
+    }
+  };
+
+  const handleLogout = () => {
+    setCurrentUser(null);
+    localStorage.removeItem("wh_logged_in_user");
+  };
 
   const handleRestoreData = (data: {
     items: Item[];
@@ -179,6 +253,7 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("wh_users", JSON.stringify(users));
   }, [users]);
+
 
   // Real-time Cloud Firestore live sync (Web, Mobile & Studio)
   const isRemoteUpdate = useRef(false);
@@ -269,7 +344,26 @@ export default function App() {
     ).sort();
   };
 
+  // If not logged in, show dedicated User Login Page
+  if (!currentUser) {
+    return (
+      <LoginView
+        users={users}
+        rolePermissions={rolePermissions}
+        onLogin={handleLogin}
+      />
+    );
+  }
+
   const canManage = role === "Admin";
+
+  // Compute allowed panels for current active role
+  const currentAllowedPanels: Page[] =
+    role === "Admin"
+      ? AVAILABLE_PANELS.map((p) => p.id)
+      : rolePermissions[role] || DEFAULT_ROLE_PERMISSIONS[role] || ["dashboard"];
+
+  const isPanelAllowed = (p: Page) => role === "Admin" || currentAllowedPanels.includes(p);
 
   return (
     <div className="min-h-screen grid grid-cols-1 md:grid-cols-[250px_1fr] bg-[#f3f6fa] text-[#18324d]">
@@ -285,18 +379,23 @@ export default function App() {
           </div>
         </div>
 
-        <div className="text-[10px] tracking-widest text-[#9fb3c8] px-2 font-semibold">
-          WORKSPACE
+        <div className="text-[10px] tracking-widest text-[#9fb3c8] px-2 font-semibold flex items-center justify-between">
+          <span>WORKSPACE</span>
+          <span className="text-[9px] font-mono text-cyan-300 bg-[#162e4a] px-1.5 py-0.5 rounded">
+            {role.toUpperCase()}
+          </span>
         </div>
 
         <nav className="flex flex-col gap-1">
-          <SidebarButton
-            active={page === "dashboard"}
-            onClick={() => setPage("dashboard")}
-            icon={<LayoutDashboard size={18} />}
-            label="Overview"
-          />
-          {canManage && (
+          {isPanelAllowed("dashboard") && (
+            <SidebarButton
+              active={page === "dashboard"}
+              onClick={() => setPage("dashboard")}
+              icon={<LayoutDashboard size={18} />}
+              label="Overview"
+            />
+          )}
+          {isPanelAllowed("items") && canManage && (
             <SidebarButton
               active={page === "items"}
               onClick={() => setPage("items")}
@@ -304,7 +403,7 @@ export default function App() {
               label="Item Master"
             />
           )}
-          {!canManage && (
+          {isPanelAllowed("items") && !canManage && (
             <SidebarButton
               active={page === "items"}
               onClick={() => setPage("items")}
@@ -312,55 +411,79 @@ export default function App() {
               label="Item Lookup"
             />
           )}
-          <SidebarButton
-            active={page === "receiving"}
-            onClick={() => setPage("receiving")}
-            icon={<ArrowDownLeft size={18} />}
-            label="Stock Receiving"
-          />
-          <SidebarButton
-            active={page === "unpack"}
-            onClick={() => setPage("unpack")}
-            icon={<PackageOpen size={18} />}
-            label="Sent to Unpack"
-          />
-          <SidebarButton
-            active={page === "issue"}
-            onClick={() => setPage("issue")}
-            icon={<ArrowUpRight size={18} />}
-            label="Send to Production"
-          />
-          <SidebarButton
-            active={page === "return"}
-            onClick={() => setPage("return")}
-            icon={<ArrowDownLeft size={18} className="rotate-180" />}
-            label="Return from Production"
-          />
-          <SidebarButton
-            active={page === "inventory"}
-            onClick={() => setPage("inventory")}
-            icon={<Database size={18} />}
-            label="Inventory Balance"
-          />
-          <SidebarButton
-            active={page === "history"}
-            onClick={() => setPage("history")}
-            icon={<History size={18} />}
-            label="Transactions"
-          />
-          <SidebarButton
-            active={page === "reports"}
-            onClick={() => setPage("reports")}
-            icon={<FileSpreadsheet size={18} />}
-            label="Daily Reports"
-          />
-          <SidebarButton
-            active={page === "ai_forecast"}
-            onClick={() => setPage("ai_forecast")}
-            icon={<Sparkles size={18} />}
-            label="AI Stock Intelligence"
-          />
-          {canManage && (
+          {isPanelAllowed("receiving") && (
+            <SidebarButton
+              active={page === "receiving"}
+              onClick={() => setPage("receiving")}
+              icon={<ArrowDownLeft size={18} />}
+              label="Stock Receiving"
+            />
+          )}
+          {isPanelAllowed("kitting_case") && (
+            <SidebarButton
+              active={page === "kitting_case"}
+              onClick={() => setPage("kitting_case")}
+              icon={<Boxes size={18} />}
+              label="Kitting Case"
+            />
+          )}
+          {isPanelAllowed("unpack") && (
+            <SidebarButton
+              active={page === "unpack"}
+              onClick={() => setPage("unpack")}
+              icon={<PackageOpen size={18} />}
+              label="Kitting-Unpack"
+            />
+          )}
+          {isPanelAllowed("issue") && (
+            <SidebarButton
+              active={page === "issue"}
+              onClick={() => setPage("issue")}
+              icon={<ArrowUpRight size={18} />}
+              label="Send to Production"
+            />
+          )}
+          {isPanelAllowed("return") && (
+            <SidebarButton
+              active={page === "return"}
+              onClick={() => setPage("return")}
+              icon={<ArrowDownLeft size={18} className="rotate-180" />}
+              label="Return from Production"
+            />
+          )}
+          {isPanelAllowed("inventory") && (
+            <SidebarButton
+              active={page === "inventory"}
+              onClick={() => setPage("inventory")}
+              icon={<Database size={18} />}
+              label="Inventory Balance"
+            />
+          )}
+          {isPanelAllowed("history") && (
+            <SidebarButton
+              active={page === "history"}
+              onClick={() => setPage("history")}
+              icon={<History size={18} />}
+              label="Transactions"
+            />
+          )}
+          {isPanelAllowed("reports") && (
+            <SidebarButton
+              active={page === "reports"}
+              onClick={() => setPage("reports")}
+              icon={<FileSpreadsheet size={18} />}
+              label="Daily Reports"
+            />
+          )}
+          {isPanelAllowed("ai_forecast") && (
+            <SidebarButton
+              active={page === "ai_forecast"}
+              onClick={() => setPage("ai_forecast")}
+              icon={<Sparkles size={18} />}
+              label="AI Stock Intelligence"
+            />
+          )}
+          {canManage && isPanelAllowed("settings") && (
             <SidebarButton
               active={page === "settings"}
               onClick={() => setPage("settings")}
@@ -389,13 +512,14 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="min-w-0 flex flex-col">
-        <header className="bg-white border-b border-[#dfe6ee] px-6 py-4 flex items-center justify-between gap-4">
+        <header className="bg-white border-b border-[#dfe6ee] px-6 py-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div>
             <h2 className="text-lg font-bold text-[#18324d]">
               {page === "dashboard" && "Dashboard Overview"}
               {page === "items" && (canManage ? "Admin Item Master Setup" : "Item Catalogue Lookup")}
               {page === "receiving" && "Stock Receiving & Inbound"}
-              {page === "unpack" && "Sent to Unpack & Decant Station"}
+              {page === "unpack" && "Kitting-Unpack Station"}
+              {page === "kitting_case" && "Kitting Case & Batch Transfer Station"}
               {page === "issue" && "Send Parts to Production"}
               {page === "inventory" && "Warehouse Inventory Balance"}
               {page === "history" && "Transaction History & Audit Log"}
@@ -408,10 +532,10 @@ export default function App() {
             </p>
           </div>
 
-          <div className="flex items-center gap-3">
-            <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-xs font-medium">
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="hidden xl:flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-xs font-medium">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span>Live Sync Active (Web, Mobile & Studio)</span>
+              <span>Live Sync Active</span>
             </div>
 
             <button
@@ -420,119 +544,208 @@ export default function App() {
               title="Sync warehouse records between Google Studio, Vercel, or backup to file"
             >
               <RefreshCw size={14} />
-              <span>Sync / Backup</span>
+              <span className="hidden md:inline">Sync / Backup</span>
             </button>
 
-            <div className="flex items-center gap-2 text-xs text-[#65768a]">
-              <span className="font-semibold">VIEW AS</span>
-              <select
-                value={role}
-                onChange={(e) => setRole(e.target.value as Role)}
-                className="border border-[#cfd9e4] rounded-lg px-3 py-1.5 bg-white text-[#18324d] font-medium focus:outline-none focus:ring-2 focus:ring-[#2463a6]"
+            {/* Current Logged-in User Profile Card */}
+            <div className="flex items-center gap-2 px-2.5 py-1.5 bg-[#f7f9fc] border border-[#cfd9e4] rounded-xl text-xs">
+              <div className="w-6 h-6 rounded-lg bg-[#2463a6] text-white flex items-center justify-center font-bold text-xs uppercase shadow-2xs">
+                {currentUser.name.charAt(0)}
+              </div>
+              <div className="hidden sm:block text-left leading-tight">
+                <div className="font-bold text-[#18324d] text-xs truncate max-w-[120px]">{currentUser.name}</div>
+                <div className="text-[10px] text-[#65768a] font-mono">@{currentUser.username}</div>
+              </div>
+              <span
+                className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                  role === "Admin"
+                    ? "bg-purple-50 text-purple-800 border-purple-200"
+                    : role === "Receiving"
+                    ? "bg-blue-50 text-blue-800 border-blue-200"
+                    : role === "Storage"
+                    ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+                    : role === "Forklift"
+                    ? "bg-amber-50 text-amber-800 border-amber-200"
+                    : role === "Kitting"
+                    ? "bg-indigo-50 text-indigo-800 border-indigo-200"
+                    : "bg-slate-50 text-slate-800 border-slate-200"
+                }`}
               >
-                <option value="Admin">Administrator</option>
-                <option value="Manager">Warehouse Manager</option>
-                <option value="User">Warehouse User</option>
-              </select>
+                {role}
+              </span>
             </div>
+
+            {/* If Admin, role switcher for perspective testing */}
+            {currentUser.role === "Admin" && (
+              <div className="hidden md:flex items-center gap-1.5 text-xs text-[#65768a]">
+                <span className="font-semibold text-[10px]">VIEW:</span>
+                <select
+                  value={role}
+                  onChange={(e) => setRole(e.target.value as Role)}
+                  className="border border-[#cfd9e4] rounded-lg px-2 py-1 bg-white text-[#18324d] font-semibold text-xs focus:outline-none focus:ring-2 focus:ring-[#2463a6]"
+                  title="Admin perspective switcher: test exact panels visible to each role"
+                >
+                  <option value="Admin">Administrator</option>
+                  <option value="Receiving">1. Receiving</option>
+                  <option value="Storage">2. Storage</option>
+                  <option value="Forklift">3. Forklift</option>
+                  <option value="Kitting">4. Kitting</option>
+                  <option value="Manager">Manager</option>
+                  <option value="User">Floor Operator</option>
+                </select>
+              </div>
+            )}
+
+            {/* Logout button */}
+            <button
+              onClick={handleLogout}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-red-50 text-[#65768a] hover:text-red-700 border border-[#cfd9e4] hover:border-red-200 rounded-lg text-xs font-semibold transition"
+              title="Sign out and return to Login page"
+            >
+              <LogOut size={13} />
+              <span className="hidden sm:inline">Sign Out</span>
+            </button>
           </div>
         </header>
 
         <div className="p-6 max-w-[1400px] w-full mx-auto flex-1">
-          {page === "dashboard" && (
-            <DashboardView
-              items={items}
-              balances={balances}
-              transactions={transactions}
-              setPage={setPage}
-              onOpenSyncModal={() => setIsSyncModalOpen(true)}
-              onRestoreData={handleRestoreData}
-            />
+          {!isPanelAllowed(page) && (
+            <div className="p-8 bg-white border border-[#dfe6ee] rounded-2xl text-center space-y-4 max-w-lg mx-auto my-12 shadow-xs">
+              <div className="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center mx-auto">
+                <AlertCircle size={24} />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-[#18324d]">Panel Access Restricted</h3>
+                <p className="text-xs text-[#65768a] mt-1.5 leading-relaxed">
+                  Your current role (<strong>{role}</strong>) does not have permission to access the{" "}
+                  <strong>{page}</strong> panel. Contact the administrator in User Settings to grant access.
+                </p>
+              </div>
+              <button
+                onClick={() => setPage(currentAllowedPanels[0] || "dashboard")}
+                className="px-4 py-2 bg-[#2463a6] hover:bg-[#1d528b] text-white rounded-xl text-xs font-semibold cursor-pointer"
+              >
+                Go to Allowed Panel ({currentAllowedPanels[0] || "Overview"})
+              </button>
+            </div>
           )}
-          {page === "items" && (
-            <ItemsView
-              items={items}
-              setItems={setItems}
-              balances={balances}
-              setBalances={setBalances}
-              canManage={canManage}
-              stock={stock}
-            />
-          )}
-          {page === "receiving" && (
-            <ReceivingView
-              items={items}
-              balances={balances}
-              setBalances={setBalances}
-              transactions={transactions}
-              setTransactions={setTransactions}
-              allLocs={allLocs}
-              stock={stock}
-              role={role}
-              setPage={setPage}
-            />
-          )}
-          {page === "unpack" && (
-            <UnpackingView
-              transactions={transactions}
-              setTransactions={setTransactions}
-              role={role}
-              items={items}
-            />
-          )}
-          {page === "issue" && (
-            <IssueView
-              items={items}
-              balances={balances}
-              setBalances={setBalances}
-              transactions={transactions}
-              setTransactions={setTransactions}
-              allLocs={allLocs}
-              stock={stock}
-              role={role}
-              setPage={setPage}
-            />
-          )}
-          {page === "return" && (
-            <ReturnView
-              items={items}
-              balances={balances}
-              setBalances={setBalances}
-              transactions={transactions}
-              setTransactions={setTransactions}
-              allLocs={allLocs}
-              stock={stock}
-              role={role}
-            />
-          )}
-          {page === "inventory" && (
-            <InventoryView balances={balances} items={items} stock={stock} />
-          )}
-          {page === "history" && (
-            <HistoryView
-              transactions={transactions}
-              setTransactions={setTransactions}
-              items={items}
-              canManage={canManage}
-              setPage={setPage}
-            />
-          )}
-          {page === "reports" && (
-            <DailyReportsView
-              transactions={transactions}
-              items={items}
-              balances={balances}
-            />
-          )}
-          {page === "ai_forecast" && (
-            <AiForecastView items={items} balances={balances} transactions={transactions} />
-          )}
-          {page === "settings" && (
-            <SettingsView
-              users={users}
-              setUsers={setUsers}
-              canManage={canManage}
-            />
+
+          {isPanelAllowed(page) && (
+            <>
+              <div className={page === "dashboard" ? "block space-y-6" : "hidden"}>
+                <DashboardView
+                  items={items}
+                  balances={balances}
+                  transactions={transactions}
+                  setPage={setPage}
+                  onOpenSyncModal={() => setIsSyncModalOpen(true)}
+                  onRestoreData={handleRestoreData}
+                />
+              </div>
+              <div className={page === "items" ? "block space-y-6" : "hidden"}>
+                <ItemsView
+                  items={items}
+                  setItems={setItems}
+                  balances={balances}
+                  setBalances={setBalances}
+                  canManage={canManage}
+                  stock={stock}
+                />
+              </div>
+              <div className={page === "receiving" ? "block space-y-6" : "hidden"}>
+                <ReceivingView
+                  items={items}
+                  balances={balances}
+                  setBalances={setBalances}
+                  transactions={transactions}
+                  setTransactions={setTransactions}
+                  allLocs={allLocs}
+                  stock={stock}
+                  role={role}
+                  setPage={setPage}
+                />
+              </div>
+              <div className={page === "unpack" ? "block space-y-6" : "hidden"}>
+                <UnpackingView
+                  transactions={transactions}
+                  setTransactions={setTransactions}
+                  balances={balances}
+                  setBalances={setBalances}
+                  role={role}
+                  items={items}
+                  setPage={setPage}
+                />
+              </div>
+              <div className={page === "kitting_case" ? "block space-y-6" : "hidden"}>
+                <KittingCaseView
+                  balances={balances}
+                  setBalances={setBalances}
+                  transactions={transactions}
+                  setTransactions={setTransactions}
+                  items={items}
+                  role={role}
+                  setPage={setPage}
+                />
+              </div>
+              <div className={page === "issue" ? "block space-y-6" : "hidden"}>
+                <IssueView
+                  items={items}
+                  balances={balances}
+                  setBalances={setBalances}
+                  transactions={transactions}
+                  setTransactions={setTransactions}
+                  allLocs={allLocs}
+                  stock={stock}
+                  role={role}
+                  setPage={setPage}
+                />
+              </div>
+              <div className={page === "return" ? "block space-y-6" : "hidden"}>
+                <ReturnView
+                  items={items}
+                  balances={balances}
+                  setBalances={setBalances}
+                  transactions={transactions}
+                  setTransactions={setTransactions}
+                  allLocs={allLocs}
+                  stock={stock}
+                  role={role}
+                  setPage={setPage}
+                />
+              </div>
+              <div className={page === "inventory" ? "block space-y-6" : "hidden"}>
+                <InventoryView balances={balances} items={items} stock={stock} />
+              </div>
+              <div className={page === "history" ? "block space-y-6" : "hidden"}>
+                <HistoryView
+                  transactions={transactions}
+                  setTransactions={setTransactions}
+                  items={items}
+                  canManage={canManage}
+                  setPage={setPage}
+                />
+              </div>
+              <div className={page === "reports" ? "block space-y-6" : "hidden"}>
+                <DailyReportsView
+                  transactions={transactions}
+                  items={items}
+                  balances={balances}
+                />
+              </div>
+              <div className={page === "ai_forecast" ? "block space-y-6" : "hidden"}>
+                <AiForecastView items={items} balances={balances} transactions={transactions} />
+              </div>
+              <div className={page === "settings" ? "block space-y-6" : "hidden"}>
+                <SettingsView
+                  users={users}
+                  setUsers={setUsers}
+                  canManage={canManage}
+                  rolePermissions={rolePermissions}
+                  setRolePermissions={setRolePermissions}
+                  currentUser={currentUser}
+                />
+              </div>
+            </>
           )}
         </div>
       </main>
@@ -1383,340 +1596,515 @@ function ItemModal({
 function UnpackingView({
   transactions,
   setTransactions,
+  balances,
+  setBalances,
   role,
   items,
+  setPage,
 }: {
   transactions: Transaction[];
   setTransactions: React.Dispatch<React.SetStateAction<Transaction[]>>;
+  balances?: Balance[];
+  setBalances?: React.Dispatch<React.SetStateAction<Balance[]>>;
   role: Role;
   items: Item[];
+  setPage?: React.Dispatch<React.SetStateAction<Page>>;
 }) {
-  const [unpackerName, setUnpackerName] = useState(
-    role === "Admin" ? "System Administrator" : "Floor Operator (WH001)"
+  const [operatorName, setOperatorName] = useState(
+    role === "Admin"
+      ? "System Administrator"
+      : role === "Kitting"
+      ? "Siti (Kitting Marshall)"
+      : "Kitting Operator"
   );
-  const [selectedTxId, setSelectedTxId] = useState("");
-  const [codeQuery, setCodeQuery] = useState("");
-  const [batchNo, setBatchNo] = useState("");
-  const [qty, setQty] = useState<number | "">("");
-  const [loc, setLoc] = useState("");
-  const [remarks, setRemarks] = useState("");
+  // Default to ALL batches so parts confirmed from Kitting Case are immediately visible!
+  const [selectedBatchNo, setSelectedBatchNo] = useState<string>("ALL");
+  const [keyedQtys, setKeyedQtys] = useState<Record<string, number | "">>({});
+  const [isBatchWindowOpen, setIsBatchWindowOpen] = useState(false);
   const [notice, setNotice] = useState<{ msg: string; type: "success" | "error" } | null>(null);
 
-  const receivingTxs = transactions.filter((t) => t.type === "Receiving");
-  const pendingTxs = receivingTxs.filter((t) => !t.unpacked);
+  // Shipments arriving from Kitting Case (transactions + any balances at Kitting)
+  const kittingTxs = useMemo(() => {
+    const list: Transaction[] = [];
+    const seenKeys = new Set<string>();
 
-  const matchedItem = items.find(
-    (i) => i.active && i.code.toLowerCase() === codeQuery.trim().toLowerCase()
-  );
+    transactions.forEach((t) => {
+      const isFromKitting =
+        t.confirmedFromKittingCase === true ||
+        (t.dest || "").toUpperCase().includes("KITTING") ||
+        (t.ref || "").toLowerCase().includes("kitting");
+      if (isFromKitting) {
+        list.push(t);
+        const k = `${t.code}_${String(t.batchNo || "").trim()}_${String(t.caseNo || "").trim()}`;
+        seenKeys.add(k);
+      }
+    });
 
-  const handleSelectTx = (txId: string) => {
-    setSelectedTxId(txId);
-    if (!txId) {
-      setCodeQuery("");
-      setBatchNo("");
-      setQty("");
-      setLoc("");
-      setRemarks("");
-      return;
-    }
-    const found = receivingTxs.find((t) => t.id === txId);
-    if (found) {
-      setCodeQuery(found.code);
-      setBatchNo(found.batchNo || "");
-      setQty(found.qty);
-      setLoc(found.dest);
-      setRemarks(found.ref || "");
-    }
-  };
-
-  const handleFormUnpack = (e: React.FormEvent) => {
-    e.preventDefault();
-    setNotice(null);
-    if (!selectedTxId && !codeQuery) {
-      setNotice({ msg: "Please select a pending receipt or enter Part No to unpack.", type: "error" });
-      return;
-    }
-    if (!unpackerName.trim()) {
-      setNotice({ msg: "Please enter the Unpacker / Operator name.", type: "error" });
-      return;
-    }
-
-    let targetTxId = selectedTxId;
-    if (!targetTxId && codeQuery) {
-      const matchPending = pendingTxs.find(
-        (t) => t.code.toLowerCase() === codeQuery.trim().toLowerCase() && (!batchNo || t.batchNo === batchNo)
-      );
-      if (matchPending) {
-        targetTxId = matchPending.id;
-      } else {
-        const anyPending = pendingTxs.find((t) => t.code.toLowerCase() === codeQuery.trim().toLowerCase());
-        if (anyPending) {
-          targetTxId = anyPending.id;
+    // Guarantee that all parts in balances currently at KITTING-STATION show up immediately
+    (balances || []).forEach((b) => {
+      if ((b.loc || "").toUpperCase().includes("KITTING") && b.qty > 0) {
+        const bBatch = String(b.batchNo || "NO-BATCH").trim();
+        const bCase = String(b.caseNo || "—").trim();
+        const k = `${b.code}_${bBatch}_${bCase}`;
+        if (!seenKeys.has(k)) {
+          const itemInfo = items.find((i) => i.code === b.code);
+          list.push({
+            id: `KIT-${b.code.replace(/[^a-zA-Z0-9]/g, "")}-${bBatch || "0"}`,
+            type: "Receiving",
+            code: b.code,
+            partName: itemInfo?.desc || b.code,
+            desc: itemInfo?.desc || b.code,
+            batchNo: bBatch,
+            caseNo: bCase,
+            qty: b.qty,
+            source: "Storage Warehouse",
+            dest: b.loc || "KITTING-STATION",
+            ref: `Kitting Case Transfer (Batch: ${bBatch}, Case: ${bCase})`,
+            user: "Forklift Driver",
+            time: b.timestamp || new Date().toLocaleString(),
+            status: "Posted",
+            unpacked: false,
+            confirmedFromKittingCase: true,
+          });
+          seenKeys.add(k);
         }
       }
-    }
+    });
 
-    if (!targetTxId) {
-      setNotice({ msg: "No matching pending receiving transaction found to unpack.", type: "error" });
+    return list;
+  }, [transactions, balances, items]);
+
+  // Distinct batches with pending and unpacked counts
+  const availableBatches = useMemo(() => {
+    const map = new Map<string, { total: number; pending: number; unpacked: number }>();
+    kittingTxs.forEach((t) => {
+      const b = String(t.batchNo || "NO-BATCH").trim();
+      if (!map.has(b)) {
+        map.set(b, { total: 0, pending: 0, unpacked: 0 });
+      }
+      const entry = map.get(b)!;
+      entry.total += 1;
+      if (t.unpacked) {
+        entry.unpacked += 1;
+      } else {
+        entry.pending += 1;
+      }
+    });
+    return Array.from(map.entries()).map(([batchNo, stats]) => ({
+      batchNo,
+      ...stats,
+    }));
+  }, [kittingTxs]);
+
+  // Parts in currently chosen batch (or ALL if selectedBatchNo is "ALL" or empty)
+  const chosenBatchTxs = useMemo(() => {
+    if (!selectedBatchNo || selectedBatchNo === "ALL") {
+      return kittingTxs;
+    }
+    const target = String(selectedBatchNo).trim().toLowerCase();
+    return kittingTxs.filter((t) => String(t.batchNo || "NO-BATCH").trim().toLowerCase() === target);
+  }, [kittingTxs, selectedBatchNo]);
+
+  const pendingCountInBatch = chosenBatchTxs.filter((t) => !t.unpacked).length;
+  const unpackedCountInBatch = chosenBatchTxs.filter((t) => t.unpacked).length;
+  const totalPendingAllBatches = kittingTxs.filter((t) => !t.unpacked).length;
+
+  // Confirm single part unpack
+  const handleConfirmPart = (tx: Transaction) => {
+    setNotice(null);
+    if (!operatorName.trim()) {
+      setNotice({ msg: "Please enter the Operator name.", type: "error" });
       return;
     }
 
-    setTransactions(
-      transactions.map((t) => {
-        if (t.id === targetTxId) {
-          return {
-            ...t,
-            unpacked: true,
-            unpackedByName: unpackerName.trim(),
-            unpackDate: new Date().toISOString().slice(0, 10),
-            batchNo: batchNo.trim() || t.batchNo,
-            qty: qty !== "" ? Number(qty) : t.qty,
-            dest: loc.trim() || t.dest,
-            ref: remarks.trim() ? `${t.ref || ""} (Decant Note: ${remarks.trim()})` : t.ref,
-          };
+    const rawVal = keyedQtys[tx.id];
+    const unpackQty = rawVal !== undefined && rawVal !== "" ? Number(rawVal) : tx.qty;
+
+    if (isNaN(unpackQty) || unpackQty < 0) {
+      setNotice({ msg: `Please enter a valid unpack quantity for Part ${tx.code}.`, type: "error" });
+      return;
+    }
+
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const timeStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+    // Update transactions
+    setTransactions((prev) => {
+      const exists = prev.some((t) => t.id === tx.id);
+      if (exists) {
+        return prev.map((t) => {
+          if (t.id === tx.id) {
+            return {
+              ...t,
+              unpacked: true,
+              qty: unpackQty,
+              unpackedByName: operatorName.trim(),
+              unpackDate: todayStr,
+              time: `${todayStr} ${timeStr}`,
+            };
+          }
+          return t;
+        });
+      } else {
+        // In case it came from kitting balances
+        const confirmedTx: Transaction = {
+          ...tx,
+          unpacked: true,
+          qty: unpackQty,
+          unpackedByName: operatorName.trim(),
+          unpackDate: todayStr,
+          time: `${todayStr} ${timeStr}`,
+        };
+        return [confirmedTx, ...prev];
+      }
+    });
+
+    // Update balance at KITTING-STATION (if balances state provided)
+    if (setBalances) {
+      setBalances((prev) => {
+        const next = [...prev];
+        const idx = next.findIndex(
+          (b) =>
+            b.code === tx.code &&
+            String(b.batchNo || "").trim().toLowerCase() === String(tx.batchNo || "").trim().toLowerCase() &&
+            (String(b.caseNo || "—").trim() === String(tx.caseNo || "—").trim() || (b.loc || "").toUpperCase().includes("KITTING"))
+        );
+        if (idx >= 0) {
+          next[idx] = { ...next[idx], qty: unpackQty, loc: "KITTING-STATION" };
+        } else {
+          next.push({
+            code: tx.code,
+            loc: "KITTING-STATION",
+            qty: unpackQty,
+            batchNo: tx.batchNo,
+            caseNo: tx.caseNo,
+            timestamp: `${todayStr} ${timeStr}`,
+          });
         }
-        return t;
-      })
-    );
+        return next;
+      });
+    }
+
     setNotice({
-      msg: `Successfully unpacked and decanted shipment ${targetTxId}. Released for operation / production!`,
+      msg: `✓ Part ${tx.code} (Batch: ${tx.batchNo || "—"}, Case: ${tx.caseNo || "—"}) confirmed unpacked with ${unpackQty.toLocaleString()} pcs! Released and ready for "Sent to Production".`,
       type: "success",
     });
-    setSelectedTxId("");
-    setCodeQuery("");
-    setBatchNo("");
-    setQty("");
-    setLoc("");
-    setRemarks("");
   };
 
-  const handleQuickUnpack = (txId: string) => {
-    handleSelectTx(txId);
-    if (!unpackerName.trim()) {
-      setNotice({ msg: "Please enter the Unpacker / Operator name.", type: "error" });
-      return;
-    }
-    setTransactions(
-      transactions.map((t) => {
+  // Re-open / Edit unpack
+  const handleReopenPart = (txId: string) => {
+    setTransactions((prev) =>
+      prev.map((t) => {
         if (t.id === txId) {
+          return { ...t, unpacked: false };
+        }
+        return t;
+      })
+    );
+  };
+
+  // Confirm all in batch
+  const handleConfirmAll = () => {
+    setNotice(null);
+    if (!operatorName.trim()) {
+      setNotice({ msg: "Please enter the Operator name.", type: "error" });
+      return;
+    }
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const timeStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const targetIds = new Set(chosenBatchTxs.map((t) => t.id));
+
+    setTransactions((prev) =>
+      prev.map((t) => {
+        if (targetIds.has(t.id)) {
+          const rawVal = keyedQtys[t.id];
+          const unpackQty = rawVal !== undefined && rawVal !== "" ? Number(rawVal) : t.qty;
           return {
             ...t,
             unpacked: true,
-            unpackedByName: unpackerName.trim(),
-            unpackDate: new Date().toISOString().slice(0, 10),
+            qty: unpackQty,
+            unpackedByName: operatorName.trim(),
+            unpackDate: todayStr,
+            time: `${todayStr} ${timeStr}`,
           };
         }
         return t;
       })
     );
+
     setNotice({
-      msg: `Successfully unpacked and decanted receipt ${txId}. Released for operation / production!`,
+      msg: `✓ All displayed parts confirmed unpacked by ${operatorName.trim()}! Released to "Sent to Production".`,
       type: "success",
     });
   };
-
-  const pendingCount = pendingTxs.length;
 
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h2 className="text-2xl font-bold tracking-tight text-[#18324d]">
-            Sent to Unpack & Decant Station
+            Kitting-Unpack Station
           </h2>
           <p className="text-sm text-[#65768a]">
-            Process received shipments from receiving bay, verify part names and batch numbers, and unpack before releasing to operation/production.
+            Choose the Batch No, review parts sent from storage via Kitting Case, key in the actual unpacked quantity for each part, and click confirm.
           </p>
         </div>
-        <div className="bg-blue-50 border border-blue-200 px-4 py-2 rounded-xl text-xs text-blue-900 font-semibold flex items-center gap-2">
-          <PackageOpen size={16} className="text-[#2463a6]" />
-          <span>Pending Unpack: {pendingCount} shipments</span>
+        <div className="flex items-center gap-3">
+          <div className="bg-blue-50 border border-blue-200 px-4 py-2 rounded-xl text-xs text-blue-900 font-semibold flex items-center gap-2">
+            <PackageOpen size={16} className="text-[#2463a6]" />
+            <span>Pending Unpack: {totalPendingAllBatches} shipments</span>
+          </div>
         </div>
       </div>
 
       {notice && (
         <div
-          className={`p-4 rounded-xl text-xs font-semibold ${
+          className={`p-4 rounded-xl text-xs font-semibold flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
             notice.type === "success"
               ? "bg-emerald-50 text-emerald-900 border border-emerald-200"
               : "bg-red-50 text-red-900 border border-red-200"
           }`}
         >
-          {notice.msg}
+          <div>{notice.msg}</div>
+          {notice.type === "success" && setPage && (
+            <button
+              type="button"
+              onClick={() => setPage("issue")}
+              className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-bold whitespace-nowrap shadow-xs transition"
+            >
+              Go to Sent to Production →
+            </button>
+          )}
         </div>
       )}
 
-      {/* Unpacking Form & Settings Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-1 bg-white border border-[#dfe6ee] rounded-2xl p-6 shadow-xs">
-          <h3 className="text-base font-semibold text-[#18324d] mb-4 flex items-center gap-2">
-            <PackageOpen size={18} className="text-[#2463a6]" /> Unpack & Decant Form
-          </h3>
-
-          <form onSubmit={handleFormUnpack} className="space-y-4">
-            <div>
-              <label className="block text-xs font-semibold text-[#42566c] mb-1">
-                Select Pending Receipt (Optional Quick Fill)
-              </label>
+      {/* Operator & Batch Selection Bar */}
+      <div className="bg-white border border-[#dfe6ee] rounded-2xl p-5 shadow-xs space-y-4">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="flex-1 max-w-md">
+            <label className="block text-xs font-bold text-[#18324d] mb-1.5 flex items-center gap-2">
+              <span className="w-5 h-5 rounded-full bg-blue-600 text-white text-[10px] flex items-center justify-center font-bold">1</span>
+              Choose Batch No to Unpack
+            </label>
+            <div className="flex items-center gap-2">
               <select
-                value={selectedTxId}
-                onChange={(e) => handleSelectTx(e.target.value)}
-                className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm bg-white font-mono"
+                value={selectedBatchNo}
+                onChange={(e) => setSelectedBatchNo(e.target.value)}
+                className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-xs font-mono font-bold bg-white text-[#18324d] focus:ring-2 focus:ring-blue-500"
               >
-                <option value="">-- Choose pending receipt --</option>
-                {pendingTxs.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.id} - {t.code} (Batch: {t.batchNo || "N/A"} · Qty: {t.qty})
+                <option value="ALL">📦 ALL BATCHES ({totalPendingAllBatches} pending)</option>
+                {availableBatches.map((b) => (
+                  <option key={b.batchNo} value={b.batchNo}>
+                    {b.batchNo} ({b.pending > 0 ? `${b.pending} parts pending` : "✓ All unpacked"})
                   </option>
                 ))}
               </select>
+              <button
+                type="button"
+                onClick={() => setIsBatchWindowOpen(true)}
+                className="whitespace-nowrap px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold shadow-xs transition flex items-center gap-1.5"
+              >
+                🪟 Select in Window
+              </button>
             </div>
+          </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-[#42566c] mb-1">Enter Part No *</label>
-              <input
-                type="text"
-                list="activeItemsUnpack"
-                value={codeQuery}
-                onChange={(e) => setCodeQuery(e.target.value)}
-                required
-                placeholder="Enter part no..."
-                className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono bg-white"
-              />
-              <datalist id="activeItemsUnpack">
-                {items
-                  .filter((i) => i.active)
-                  .map((i) => (
-                    <option key={i.code} value={i.code}>
-                      {i.desc}
-                    </option>
-                  ))}
-              </datalist>
-            </div>
-
-            {codeQuery && matchedItem && (
-              <div className="p-3 bg-emerald-50/50 border border-emerald-200 rounded-xl text-xs space-y-1">
-                <div className="font-bold text-emerald-900">{matchedItem.desc}</div>
-                <div className="text-emerald-700 font-mono">
-                  {matchedItem.code}
-                </div>
-              </div>
-            )}
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-[#42566c] mb-1">Batch No / Lot No</label>
-                <input
-                  type="text"
-                  value={batchNo}
-                  onChange={(e) => setBatchNo(e.target.value)}
-                  placeholder="e.g. BATCH-2026"
-                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono bg-white"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-[#42566c] mb-1">Quantity</label>
-                <input
-                  type="number"
-                  min="0.001"
-                  step="any"
-                  value={qty}
-                  onChange={(e) => setQty(e.target.value === "" ? "" : Number(e.target.value))}
-                  placeholder="e.g. 50"
-                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono bg-white"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-[#42566c] mb-1">
-                  Unpacker / Operator Name *
-                </label>
-                <input
-                  type="text"
-                  value={unpackerName}
-                  onChange={(e) => setUnpackerName(e.target.value)}
-                  required
-                  placeholder="e.g. Ahmad Zaki"
-                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm bg-white"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-[#42566c] mb-1">
-                  Decant / Inspection Status
-                </label>
-                <input
-                  type="text"
-                  value={remarks}
-                  onChange={(e) => setRemarks(e.target.value)}
-                  placeholder="e.g. Inspected OK"
-                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm bg-white font-mono"
-                />
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              className="w-full py-3 bg-[#2463a6] hover:bg-[#1d528a] text-white rounded-xl text-xs font-semibold shadow-xs transition flex items-center justify-center gap-1.5"
-            >
-              <PackageOpen size={14} /> ✓ Confirm & Post Unpack & Decant
-            </button>
-          </form>
+          <div className="flex-1 max-w-xs">
+            <label className="block text-xs font-bold text-[#42566c] mb-1.5">
+              Unpack Operator Name
+            </label>
+            <input
+              type="text"
+              value={operatorName}
+              onChange={(e) => setOperatorName(e.target.value)}
+              required
+              placeholder="Operator name..."
+              className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-xs bg-white text-[#18324d] font-semibold"
+            />
+          </div>
         </div>
 
-        {/* Inbound Queue Table */}
-        <div className="lg:col-span-2 bg-white border border-[#dfe6ee] rounded-2xl shadow-xs overflow-hidden flex flex-col">
-          <div className="p-4 border-b border-[#f0f4f8] bg-[#f8fafc] font-bold text-xs text-[#18324d] uppercase tracking-wider flex justify-between items-center">
-            <span>Inbound Shipments Queue ({receivingTxs.length})</span>
-            <span className="text-[11px] font-normal text-[#65768a]">Only unpacked items can be sent to production</span>
+        {/* Quick batch tabs/chips */}
+        <div className="pt-2 border-t border-[#f0f4f8]">
+          <div className="text-[11px] font-semibold text-[#65768a] mb-2">Select Batch Filter:</div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setSelectedBatchNo("ALL")}
+              className={`px-3 py-1.5 rounded-xl text-xs font-mono transition flex items-center gap-2 border ${
+                selectedBatchNo === "ALL" || !selectedBatchNo
+                  ? "bg-blue-600 border-blue-600 text-white font-bold shadow-xs"
+                  : "bg-gray-50 border-[#dfe6ee] text-[#42566c] hover:bg-white"
+              }`}
+            >
+              <span>📦 All Batches</span>
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
+                selectedBatchNo === "ALL" ? "bg-white text-blue-900" : "bg-amber-100 text-amber-800"
+              }`}>
+                {totalPendingAllBatches} pending
+              </span>
+            </button>
+
+            {availableBatches.map((b) => {
+              const isSelected = selectedBatchNo === b.batchNo;
+              return (
+                <button
+                  key={b.batchNo}
+                  type="button"
+                  onClick={() => setSelectedBatchNo(b.batchNo)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-mono transition flex items-center gap-2 border ${
+                    isSelected
+                      ? "bg-blue-50 border-blue-500 text-blue-900 font-bold shadow-xs"
+                      : "bg-gray-50 border-[#dfe6ee] text-[#42566c] hover:bg-white"
+                  }`}
+                >
+                  <span>{b.batchNo}</span>
+                  {b.pending > 0 ? (
+                    <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
+                      {b.pending} pending
+                    </span>
+                  ) : (
+                    <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                      ✓ Done
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </div>
-          <div className="overflow-x-auto flex-1">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-[#f4f7fb] text-[#65768a] uppercase font-semibold border-b border-[#dfe6ee]">
+        </div>
+      </div>
+
+      {/* Selected Batch Parts Table */}
+      <div className="bg-white border border-[#dfe6ee] rounded-2xl shadow-xs overflow-hidden">
+        <div className="p-4 bg-[#f8fafc] border-b border-[#dfe6ee] flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+          <div>
+            <div className="text-xs font-semibold text-[#65768a]">
+              Active Batch Data:
+            </div>
+            <div className="text-base font-bold font-mono text-[#18324d] flex items-center gap-2">
+              <span>{selectedBatchNo === "ALL" ? "All Arrived Batches" : selectedBatchNo}</span>
+              <span className="text-xs font-normal text-[#65768a]">
+                ({chosenBatchTxs.length} parts · {pendingCountInBatch} pending · {unpackedCountInBatch} unpacked)
+              </span>
+            </div>
+          </div>
+
+          {pendingCountInBatch > 0 && (
+            <button
+              type="button"
+              onClick={handleConfirmAll}
+              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs transition flex items-center gap-1.5"
+            >
+              ✓ Confirm All Parts ({pendingCountInBatch})
+            </button>
+          )}
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead className="bg-[#f4f7fb] text-[#65768a] uppercase font-semibold border-b border-[#dfe6ee]">
+              <tr>
+                <th className="p-3">Receive ID & Time</th>
+                <th className="p-3">Part No & Description</th>
+                <th className="p-3">Batch No</th>
+                <th className="p-3">Case No</th>
+                <th className="p-3">Staging Location</th>
+                <th className="p-3">Expected Qty</th>
+                <th className="p-3 bg-blue-50/70 text-blue-900">Key-in Unpack Quantity *</th>
+                <th className="p-3">Status</th>
+                <th className="p-3 text-right">Confirm</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#f0f4f8]">
+              {chosenBatchTxs.length === 0 ? (
                 <tr>
-                  <th className="p-3">Receive ID & Time</th>
-                  <th className="p-3">Part No & Part Name</th>
-                  <th className="p-3">Batch No</th>
-                  <th className="p-3">Qty Received</th>
-                  <th className="p-3">DO / Ref</th>
-                  <th className="p-3">Receiver</th>
-                  <th className="p-3">Unpack Status</th>
-                  <th className="p-3 text-right">Action</th>
+                  <td colSpan={9} className="p-12 text-center text-[#65768a]">
+                    <div className="max-w-md mx-auto space-y-2">
+                      <p className="font-semibold text-[#18324d]">No parts waiting to unpack in this view.</p>
+                      <p className="text-xs text-[#65768a]">
+                        Forklift driver must confirm parts from <strong>"Kitting Case"</strong> first. Once confirmed, they will appear here instantly.
+                      </p>
+                      {setPage && (
+                        <div className="pt-2">
+                          <button
+                            type="button"
+                            onClick={() => setPage("kitting_case")}
+                            className="px-4 py-2 bg-[#2463a6] hover:bg-[#1d528a] text-white rounded-xl text-xs font-semibold"
+                          >
+                            Go to Kitting Case →
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </td>
                 </tr>
-              </thead>
-              <tbody className="divide-y divide-[#f0f4f8]">
-                {receivingTxs.map((t) => {
+              ) : (
+                chosenBatchTxs.map((t) => {
                   const isUnpacked = t.unpacked === true;
+                  const curKeyedQty = keyedQtys[t.id] !== undefined ? keyedQtys[t.id] : t.qty;
+
                   return (
-                    <tr key={t.id} className="hover:bg-blue-50/25 transition">
+                    <tr key={t.id} className="hover:bg-blue-50/20 transition">
                       <td className="p-3">
-                        <div className="font-bold text-[#18324d] font-mono">{t.id}</div>
+                        <div className="font-mono font-bold text-[#18324d]">{t.id}</div>
                         <div className="text-[11px] text-[#65768a]">{t.time}</div>
                       </td>
                       <td className="p-3">
-                        <div className="font-bold text-[#18324d] font-mono">{t.code}</div>
+                        <div className="font-mono font-bold text-[#18324d]">{t.code}</div>
                         <div className="text-[11px] text-[#42566c]">{t.partName || t.desc}</div>
                       </td>
+                      <td className="p-3 font-mono font-bold text-blue-800">
+                        {t.batchNo || "—"}
+                      </td>
                       <td className="p-3 font-mono">
-                        {t.batchNo ? (
-                          <span className="px-2 py-0.5 bg-blue-50 text-blue-800 rounded font-semibold border border-blue-200 text-[11px]">
-                            {t.batchNo}
+                        {t.caseNo && t.caseNo !== "—" ? (
+                          <span className="px-2 py-0.5 bg-blue-50 text-blue-900 rounded font-semibold border border-blue-200 text-[11px]">
+                            {t.caseNo}
                           </span>
                         ) : (
                           <span className="text-[#a0aec0]">—</span>
                         )}
                       </td>
-                      <td className="p-3 font-mono font-bold text-emerald-700">+{t.qty.toLocaleString()}</td>
-                      <td className="p-3 font-mono text-[#65768a]">{t.ref}</td>
-                      <td className="p-3 text-[#42566c]">{t.receiverName || t.user}</td>
+                      <td className="p-3 font-mono text-[#42566c]">
+                        {t.dest || "KITTING-STATION"}
+                      </td>
+                      <td className="p-3 font-mono font-bold text-[#18324d]">
+                        {t.qty.toLocaleString()} pcs
+                      </td>
+                      <td className="p-3 bg-blue-50/30">
+                        {isUnpacked ? (
+                          <div className="font-mono font-bold text-emerald-700 text-sm">
+                            {t.qty.toLocaleString()} pcs
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              type="number"
+                              min="0"
+                              step="any"
+                              value={curKeyedQty}
+                              onChange={(e) => {
+                                const val = e.target.value === "" ? "" : Number(e.target.value);
+                                setKeyedQtys((prev) => ({ ...prev, [t.id]: val }));
+                              }}
+                              placeholder="Key in qty"
+                              className="w-28 px-2.5 py-1.5 border border-[#cfd9e4] rounded-lg text-xs font-mono font-bold text-[#18324d] bg-white focus:ring-2 focus:ring-blue-500"
+                            />
+                            <span className="text-[11px] text-[#65768a] font-semibold">pcs</span>
+                          </div>
+                        )}
+                      </td>
                       <td className="p-3">
                         {isUnpacked ? (
                           <div className="space-y-0.5">
                             <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                              ✓ Unpacked & Decanted
+                              ✓ Unpacked & Confirmed
                             </span>
-                            <div className="text-[10px] text-[#65768a]">By {t.unpackedByName || "Operator"}</div>
+                            <div className="text-[10px] text-[#65768a]">
+                              By {t.unpackedByName || "Operator"} · {t.unpackDate || "Today"}
+                            </div>
                           </div>
                         ) : (
                           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200 animate-pulse">
@@ -1727,30 +2115,483 @@ function UnpackingView({
                       <td className="p-3 text-right">
                         {!isUnpacked ? (
                           <button
-                            onClick={() => handleQuickUnpack(t.id)}
-                            className="px-3 py-1.5 bg-[#2463a6] hover:bg-[#1d528a] text-white rounded-xl text-xs font-semibold shadow-xs transition flex items-center gap-1.5 ml-auto"
+                            type="button"
+                            onClick={() => handleConfirmPart(t)}
+                            className="px-3.5 py-1.5 bg-[#2463a6] hover:bg-[#1d528a] text-white rounded-lg text-xs font-bold shadow-xs transition flex items-center gap-1.5 ml-auto"
                           >
-                            <PackageOpen size={13} /> Unpack & Decant
+                            ✓ Confirm
                           </button>
                         ) : (
-                          <span className="text-xs text-emerald-700 font-semibold">Ready for Operation</span>
+                          <button
+                            type="button"
+                            onClick={() => handleReopenPart(t.id)}
+                            className="text-[11px] text-[#65768a] hover:text-[#2463a6] font-semibold underline ml-auto block"
+                          >
+                            Edit Qty
+                          </button>
                         )}
                       </td>
                     </tr>
                   );
-                })}
-                {receivingTxs.length === 0 && (
-                  <tr>
-                    <td colSpan={8} className="p-8 text-center text-[#65768a]">
-                      No receiving transactions found. Please record stock receiving first.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+                })
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
+
+      {/* Batch Selection Modal Window */}
+      {isBatchWindowOpen && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-xl">
+            <div className="flex items-center justify-between pb-3 border-b border-[#dfe6ee]">
+              <h3 className="text-base font-bold text-[#18324d] flex items-center gap-2">
+                📦 Choose Batch No to Unpack
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsBatchWindowOpen(false)}
+                className="text-[#65768a] hover:text-[#18324d]"
+              >
+                ✕
+              </button>
+            </div>
+            <p className="text-xs text-[#65768a]">
+              Operator: Select a batch number below to load its parts into the unpack table, or choose "View All Batches".
+            </p>
+            <div className="space-y-2 max-h-60 overflow-y-auto">
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedBatchNo("ALL");
+                  setIsBatchWindowOpen(false);
+                }}
+                className={`w-full p-3 rounded-xl border text-left flex items-center justify-between transition ${
+                  selectedBatchNo === "ALL"
+                    ? "bg-blue-50 border-blue-500 text-blue-900 font-bold"
+                    : "bg-white border-[#cfd9e4] hover:bg-[#f8fafc] text-[#18324d]"
+                }`}
+              >
+                <div>
+                  <div className="font-mono text-sm">📦 View All Batches Together</div>
+                  <div className="text-[11px] text-[#65768a]">
+                    {kittingTxs.length} total shipment(s) · {totalPendingAllBatches} pending
+                  </div>
+                </div>
+                <span className="text-xs font-semibold px-2.5 py-1 bg-[#2463a6] text-white rounded-lg">
+                  {selectedBatchNo === "ALL" ? "Active ✓" : "Select All"}
+                </span>
+              </button>
+
+              {availableBatches.map((b) => {
+                const isSelected = selectedBatchNo === b.batchNo;
+                return (
+                  <button
+                    key={b.batchNo}
+                    type="button"
+                    onClick={() => {
+                      setSelectedBatchNo(b.batchNo);
+                      setIsBatchWindowOpen(false);
+                    }}
+                    className={`w-full p-3 rounded-xl border text-left flex items-center justify-between transition ${
+                      isSelected
+                        ? "bg-blue-50 border-blue-500 text-blue-900 font-bold"
+                        : "bg-white border-[#cfd9e4] hover:bg-[#f8fafc] text-[#18324d]"
+                    }`}
+                  >
+                    <div>
+                      <div className="font-mono text-sm">{b.batchNo}</div>
+                      <div className="text-[11px] text-[#65768a]">
+                        {b.total} shipment(s) · {b.pending} pending · {b.unpacked} unpacked
+                      </div>
+                    </div>
+                    <span className="text-xs font-semibold px-2.5 py-1 bg-[#2463a6] text-white rounded-lg">
+                      {isSelected ? "Active ✓" : "Select Batch"}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex justify-end pt-2 border-t border-[#dfe6ee]">
+              <button
+                type="button"
+                onClick={() => setIsBatchWindowOpen(false)}
+                className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-[#18324d] rounded-xl text-xs font-semibold"
+              >
+                Close Window
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* KITTING CASE VIEW                                                          */
+/* -------------------------------------------------------------------------- */
+function KittingCaseView({
+  balances,
+  setBalances,
+  transactions,
+  setTransactions,
+  items,
+  role,
+  setPage,
+}: {
+  balances: Balance[];
+  setBalances: React.Dispatch<React.SetStateAction<Balance[]>>;
+  transactions: Transaction[];
+  setTransactions: React.Dispatch<React.SetStateAction<Transaction[]>>;
+  items: Item[];
+  role: Role;
+  setPage?: React.Dispatch<React.SetStateAction<Page>>;
+}) {
+  const [isBatchWindowOpen, setIsBatchWindowOpen] = useState(false);
+  const [selectedBatchNo, setSelectedBatchNo] = useState("");
+  const [destinationPlace, setDestinationPlace] = useState("KITTING-STATION");
+  const [forkliftDriver, setForkliftDriver] = useState(
+    role === "Admin" ? "System Administrator" : "Forklift Driver / Hazim"
+  );
+  const [notice, setNotice] = useState<{ msg: string; type: "success" | "error" } | null>(null);
+
+  // Available batch numbers from current inventory balances
+  const allBatches = useMemo(() => {
+    const set = new Set<string>();
+    balances.forEach((b) => {
+      if (b.batchNo !== undefined && b.batchNo !== null && String(b.batchNo).trim() !== "") {
+        set.add(String(b.batchNo).trim());
+      }
+    });
+    return Array.from(set);
+  }, [balances]);
+
+  // Balance items belonging to the chosen batch
+  const chosenBatchBalances = useMemo(() => {
+    if (!selectedBatchNo) return [];
+    const target = String(selectedBatchNo).trim().toLowerCase();
+    return balances.filter((b) => String(b.batchNo || "").trim().toLowerCase() === target);
+  }, [balances, selectedBatchNo]);
+
+  const handleConfirmPart = (item: Balance) => {
+    setNotice(null);
+    const now = new Date().toLocaleString();
+    const dest = destinationPlace.trim() || "KITTING-STATION";
+    const driver = forkliftDriver.trim() || "Forklift Driver";
+    const sourceLoc = item.loc;
+    const qty = item.qty;
+    const caseNo = item.caseNo || "—";
+    const batchStr = String(item.batchNo || selectedBatchNo || "NO-BATCH").trim();
+    const caseStr = String(caseNo).trim();
+
+    try {
+      localStorage.setItem("wh_last_kitted_batch", batchStr);
+    } catch {}
+
+    // Functional state update for balances
+    setBalances((prevBalances) => {
+      const next = [...prevBalances];
+
+      // Deduct from storage location
+      const srcIdx = next.findIndex(
+        (b) =>
+          b.code === item.code &&
+          b.loc === sourceLoc &&
+          String(b.batchNo || "").trim().toLowerCase() === batchStr.toLowerCase() &&
+          String(b.caseNo || "—").trim() === caseStr
+      );
+      if (srcIdx >= 0) {
+        const remaining = next[srcIdx].qty - qty;
+        if (remaining <= 0) {
+          next.splice(srcIdx, 1);
+        } else {
+          next[srcIdx] = { ...next[srcIdx], qty: remaining };
+        }
+      }
+
+      // Add to Kitting destination
+      const destIdx = next.findIndex(
+        (b) =>
+          b.code === item.code &&
+          b.loc === dest &&
+          String(b.batchNo || "").trim().toLowerCase() === batchStr.toLowerCase() &&
+          String(b.caseNo || "—").trim() === caseStr
+      );
+      if (destIdx >= 0) {
+        next[destIdx] = { ...next[destIdx], qty: next[destIdx].qty + qty };
+      } else {
+        next.push({
+          code: item.code,
+          loc: dest,
+          qty,
+          batchNo: batchStr,
+          caseNo: caseStr,
+          timestamp: now,
+        });
+      }
+      return next;
+    });
+
+    // Create Transaction log with functional update
+    const txId = `KIT-${Date.now().toString().slice(-6)}-${Math.floor(10 + Math.random() * 90)}`;
+    const newTx: Transaction = {
+      id: txId,
+      type: "Receiving",
+      code: item.code,
+      partName: items.find((i) => i.code === item.code)?.desc || "Part",
+      desc: items.find((i) => i.code === item.code)?.desc || "Part",
+      batchNo: batchStr,
+      caseNo: caseStr,
+      qty,
+      source: sourceLoc,
+      dest,
+      ref: `Kitting Case Transfer by ${driver} (Batch: ${batchStr}, Case: ${caseStr})`,
+      user: driver,
+      time: now,
+      status: "Posted",
+      unpacked: false,
+      confirmedFromKittingCase: true,
+    };
+    setTransactions((prev) => [newTx, ...prev]);
+
+    setNotice({
+      msg: `🎉 Successfully confirmed part ${item.code} (Case: ${caseNo}, Qty: ${qty}) sent to ${dest}! It is now immediately ready in "Kitting-Unpack".`,
+      type: "success",
+    });
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+          <h2 className="text-2xl font-bold tracking-tight text-[#18324d]">
+            Kitting Case & Batch Transfer Station
+          </h2>
+          <p className="text-sm text-[#65768a]">
+            Forklift takes parts/batches out of warehouse storage and confirms by part when sending to the Kitting place.
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setIsBatchWindowOpen(true)}
+            className="flex items-center gap-2 px-4 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold shadow-xs transition"
+          >
+            🚛 Forklift Choose Batch No (Window)
+          </button>
+        </div>
+      </div>
+
+      {notice && (
+        <div
+          className={`p-4 rounded-xl text-xs font-semibold flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+            notice.type === "success"
+              ? "bg-emerald-50 text-emerald-900 border border-emerald-200"
+              : "bg-red-50 text-red-900 border border-red-200"
+          }`}
+        >
+          <div>{notice.msg}</div>
+          {notice.type === "success" && setPage && (
+            <button
+              type="button"
+              onClick={() => setPage("unpack")}
+              className="px-3.5 py-1.5 bg-[#2463a6] hover:bg-[#1d528a] text-white rounded-lg text-xs font-bold whitespace-nowrap shadow-xs transition"
+            >
+              Go to Kitting-Unpack Station →
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* TABLE #2: Selected Batch Kitting Table */}
+      <div className="bg-white border-2 border-amber-300 rounded-2xl shadow-xs overflow-hidden">
+        <div className="p-4 bg-amber-50 border-b border-amber-200 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="w-6 h-6 rounded-full bg-amber-600 text-white font-bold text-xs flex items-center justify-center">
+              2
+            </span>
+            <h3 className="text-sm font-bold text-amber-900">
+              2. Selected Batch Kitting Table ({selectedBatchNo ? `Batch No: ${selectedBatchNo}` : "No Batch Selected"})
+            </h3>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsBatchWindowOpen(true)}
+            className="px-3 py-1.5 bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-lg text-xs font-semibold transition"
+          >
+            {selectedBatchNo ? "Change Batch No" : "Select Batch No in Window"}
+          </button>
+        </div>
+
+        {selectedBatchNo ? (
+          <div className="p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-blue-50/50 p-4 rounded-xl border border-blue-200">
+              <div>
+                <div className="text-xs font-semibold text-[#65768a]">Active Batch Selected:</div>
+                <div className="font-mono text-base font-bold text-[#18324d]">{selectedBatchNo}</div>
+                <div className="text-xs text-blue-800 mt-1">
+                  {chosenBatchBalances.length} item(s) in this batch. Confirm each part individually below.
+                </div>
+              </div>
+              <div className="flex items-center gap-3 flex-wrap">
+                <div>
+                  <label className="block text-[11px] font-semibold text-[#42566c] mb-1">Destination Place</label>
+                  <input
+                    type="text"
+                    value={destinationPlace}
+                    onChange={(e) => setDestinationPlace(e.target.value)}
+                    required
+                    className="px-3 py-1.5 border border-[#cfd9e4] rounded-lg text-xs font-mono bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-[#42566c] mb-1">Forklift Driver</label>
+                  <input
+                    type="text"
+                    value={forkliftDriver}
+                    onChange={(e) => setForkliftDriver(e.target.value)}
+                    required
+                    className="px-3 py-1.5 border border-[#cfd9e4] rounded-lg text-xs bg-white"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto border border-[#dfe6ee] rounded-xl">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-[#f4f7fb] text-[#65768a] uppercase font-semibold border-b border-[#dfe6ee]">
+                  <tr>
+                    <th className="p-3">Part No</th>
+                    <th className="p-3">Description</th>
+                    <th className="p-3">Case No</th>
+                    <th className="p-3">Storage Location</th>
+                    <th className="p-3">Batch No</th>
+                    <th className="p-3">Quantity</th>
+                    <th className="p-3 text-right">Confirm by Part</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#f0f4f8]">
+                  {chosenBatchBalances.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="text-center py-6 text-[#65768a]">
+                        All parts in batch {selectedBatchNo} have been sent to kitting or no items found.
+                      </td>
+                    </tr>
+                  ) : (
+                    chosenBatchBalances.map((b, idx) => {
+                      const itemDesc = items.find((i) => i.code === b.code)?.desc || "—";
+                      const isAtKitting = (b.loc || "").trim().toUpperCase() === destinationPlace.trim().toUpperCase() || (b.loc || "").toUpperCase().includes("KITTING");
+                      return (
+                        <tr key={idx} className="hover:bg-amber-50/20">
+                          <td className="p-3 font-mono font-bold text-[#18324d]">{b.code}</td>
+                          <td className="p-3 text-[#42566c]">{itemDesc}</td>
+                          <td className="p-3 font-mono">
+                            {b.caseNo && b.caseNo !== "—" ? (
+                              <span className="px-2 py-0.5 bg-blue-50 text-blue-900 rounded font-semibold border border-blue-200 text-[11px]">
+                                {b.caseNo}
+                              </span>
+                            ) : (
+                              <span className="text-[#a0aec0]">—</span>
+                            )}
+                          </td>
+                          <td className="p-3 font-mono font-bold text-purple-800">{b.loc}</td>
+                          <td className="p-3 font-mono text-blue-800">{b.batchNo || "—"}</td>
+                          <td className="p-3 font-mono font-bold text-emerald-700">{b.qty.toLocaleString()}</td>
+                          <td className="p-3 text-right">
+                            {isAtKitting ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                ✓ Sent to Kitting
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleConfirmPart(b)}
+                                className="px-3 py-1.5 bg-[#2463a6] hover:bg-[#1d528a] text-white rounded-lg text-xs font-bold shadow-xs transition flex items-center gap-1 ml-auto"
+                              >
+                                ✓ Confirm Part
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : (
+          <div className="p-12 text-center text-xs text-[#65768a]">
+            No batch currently selected. Click <strong>"Select Batch No in Window"</strong> above to choose a batch number and view its Table #2 kitting parts for confirmation.
+          </div>
+        )}
+      </div>
+
+      {/* Forklift Batch Selection Modal Window */}
+      {isBatchWindowOpen && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-xl">
+            <div className="flex items-center justify-between pb-3 border-b border-[#dfe6ee]">
+              <h3 className="text-base font-bold text-[#18324d] flex items-center gap-2">
+                🚛 Forklift Batch Selection Window
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsBatchWindowOpen(false)}
+                className="text-[#65768a] hover:text-[#18324d]"
+              >
+                ✕
+              </button>
+            </div>
+            <p className="text-xs text-[#65768a]">
+              Forklift driver: Select a batch number from storage below to load into Table #2 and send to Kitting place.
+            </p>
+            <div className="space-y-2 max-h-60 overflow-y-auto">
+              {allBatches.length === 0 ? (
+                <div className="p-4 text-center text-xs text-[#65768a]">No batch numbers found in current storage inventory.</div>
+              ) : (
+                allBatches.map((b: string) => {
+                  const count = balances.filter((item: Balance) => item.batchNo === b).length;
+                  const isSelected = selectedBatchNo === b;
+                  return (
+                    <button
+                      key={b}
+                      type="button"
+                      onClick={() => {
+                        setSelectedBatchNo(b);
+                        setIsBatchWindowOpen(false);
+                      }}
+                      className={`w-full p-3 rounded-xl border text-left flex items-center justify-between transition ${
+                        isSelected
+                          ? "bg-amber-50 border-amber-400 text-amber-900 font-bold"
+                          : "bg-white border-[#cfd9e4] hover:bg-[#f8fafc] text-[#18324d]"
+                      }`}
+                    >
+                      <div>
+                        <div className="font-mono text-sm">{b}</div>
+                        <div className="text-[11px] text-[#65768a]">{count} storage item(s) in this batch</div>
+                      </div>
+                      <span className="text-xs font-semibold px-2.5 py-1 bg-[#2463a6] text-white rounded-lg">
+                        {isSelected ? "Selected ✓" : "Choose Batch"}
+                      </span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+            <div className="flex justify-end pt-2 border-t border-[#dfe6ee]">
+              <button
+                type="button"
+                onClick={() => setIsBatchWindowOpen(false)}
+                className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-[#18324d] rounded-xl text-xs font-semibold"
+              >
+                Close Window
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1803,6 +2644,7 @@ function ReceivingView({
     desc: string;
     model: string;
     batchNo: string;
+    caseNo?: string;
     qty: number;
     loc: string;
     ref: string;
@@ -1830,13 +2672,13 @@ function ReceivingView({
   const [editingStagedId, setEditingStagedId] = useState<string | null>(null);
   const [editQty, setEditQty] = useState<number | "">("");
   const [editLoc, setEditLoc] = useState("");
+  const [editCaseNo, setEditCaseNo] = useState("");
 
   // Key-in form inputs for current container
   const [codeQuery, setCodeQuery] = useState("");
+  const [caseNo, setCaseNo] = useState("");
   const [qty, setQty] = useState<number | "">("");
   const [loc, setLoc] = useState("A-01-01");
-  const [ref, setRef] = useState("");
-  const [batchNo, setBatchNo] = useState("");
   const [receiverName, setReceiverName] = useState(
     role === "Admin" ? "System Administrator" : role === "Manager" ? "Warehouse Manager" : "Floor Operator (WH001)"
   );
@@ -1883,9 +2725,7 @@ function ReceivingView({
     };
 
     setActiveContainer(newContainer);
-    setBatchNo(newContainer.batchNo);
     setReceiverName(newContainer.receiverName);
-    if (newContainer.doRef) setRef(newContainer.doRef);
     setIsContainerModalOpen(false);
     setModalError("");
     setNotice({
@@ -1922,9 +2762,10 @@ function ReceivingView({
       return;
     }
 
+    const finalCaseNo = caseNo.trim() || "—";
     const finalLoc = loc.trim() || "A-01-01";
-    const finalBatch = batchNo.trim() || activeContainer.batchNo;
-    const finalRef = ref.trim() || activeContainer.doRef || "—";
+    const finalBatch = activeContainer.batchNo;
+    const finalRef = activeContainer.doRef || "—";
 
     const newStagedItem = {
       id: `STG-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
@@ -1933,22 +2774,24 @@ function ReceivingView({
       desc: matchedItem.desc,
       model: matchedItem.model,
       batchNo: finalBatch,
+      caseNo: finalCaseNo,
       qty: qNum,
       loc: finalLoc,
       ref: finalRef,
-      time: new Date().toLocaleString(),
+      time: formatTimestamp(),
     };
 
     // Temporarily save to red highlight staging area (DOES NOT CHANGE INVENTORY YET)
     setStagedItems((prev) => [...prev, newStagedItem]);
 
     setNotice({
-      msg: `✓ Part ${matchedItem.code} (+${qNum.toLocaleString()}) saved to temporary red area.`,
+      msg: `✓ Part ${matchedItem.code} (${finalCaseNo !== "—" ? `Case ${finalCaseNo}, ` : ""}+${qNum.toLocaleString()}) saved to temporary red area.`,
       type: "success",
     });
 
-    // Reset part & qty for next entry
+    // Reset part, case no & qty for next entry
     setCodeQuery("");
+    setCaseNo("");
     setQty("");
   };
 
@@ -1958,10 +2801,11 @@ function ReceivingView({
   };
 
   // Open edit modal for staged item
-  const openEditStaged = (item: { id: string; qty: number; loc: string }) => {
+  const openEditStaged = (item: { id: string; qty: number; loc: string; caseNo?: string }) => {
     setEditingStagedId(item.id);
     setEditQty(item.qty);
     setEditLoc(item.loc);
+    setEditCaseNo(item.caseNo && item.caseNo !== "—" ? item.caseNo : "");
   };
 
   const handleSaveEditStaged = (e: React.FormEvent) => {
@@ -1970,11 +2814,16 @@ function ReceivingView({
     const qNum = Number(editQty);
     if (!(qNum > 0 && Number.isFinite(qNum))) return;
 
-    // Update in staging only (Request 3: does not change inventory that already keyin)
+    // Update in staging only (does not change inventory that already keyin)
     setStagedItems((prev) =>
       prev.map((item) =>
         item.id === editingStagedId
-          ? { ...item, qty: qNum, loc: editLoc.trim() || item.loc }
+          ? {
+              ...item,
+              qty: qNum,
+              loc: editLoc.trim() || item.loc,
+              caseNo: editCaseNo.trim() || item.caseNo || "—",
+            }
           : item
       )
     );
@@ -1992,9 +2841,9 @@ function ReceivingView({
       return;
     }
 
-    const receiptTimestamp = new Date().toLocaleString();
+    const receiptTimestamp = formatTimestamp();
 
-    // 1. Send all parts to warehouse inventory balances with receipt timestamp
+    // 1. Send all parts to warehouse inventory balances with receipt timestamp and caseNo
     let updatedBalances = [...balances];
     for (const item of stagedItems) {
       updatedBalances = upsertBalance(
@@ -2003,7 +2852,8 @@ function ReceivingView({
         item.loc,
         item.qty,
         item.batchNo,
-        receiptTimestamp
+        receiptTimestamp,
+        item.caseNo
       );
     }
     setBalances(updatedBalances);
@@ -2017,6 +2867,7 @@ function ReceivingView({
       desc: item.desc,
       batchNo: item.batchNo,
       containerNo: activeContainer.containerNo,
+      caseNo: item.caseNo,
       qty: item.qty,
       source: "Supplier",
       dest: item.loc,
@@ -2188,6 +3039,16 @@ function ReceivingView({
             </div>
             <form onSubmit={handleSaveEditStaged} className="space-y-3">
               <div>
+                <label className="block text-xs font-semibold text-[#42566c] mb-1">Case No</label>
+                <input
+                  type="text"
+                  value={editCaseNo}
+                  onChange={(e) => setEditCaseNo(e.target.value)}
+                  placeholder="e.g. CASE-01"
+                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono uppercase"
+                />
+              </div>
+              <div>
                 <label className="block text-xs font-semibold text-[#42566c] mb-1">Quantity</label>
                 <input
                   type="number"
@@ -2345,10 +3206,8 @@ function ReceivingView({
         </div>
       )}
 
-      {/* TWO COLUMN GRID: KEY-IN FORM ON LEFT, GUIDELINES/RECENT ON RIGHT */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* KEY-IN RECEIVING DETAILS FORM */}
-        <div className="bg-white border border-[#dfe6ee] rounded-2xl p-6 shadow-xs space-y-4">
+      {/* KEY-IN RECEIVING DETAILS FORM */}
+      <div className="bg-white border border-[#dfe6ee] rounded-2xl p-6 shadow-xs space-y-4">
           <div className="flex items-center justify-between border-b pb-3">
             <div>
               <h3 className="text-base font-bold text-[#18324d]">Key In Receiving Parts</h3>
@@ -2432,6 +3291,17 @@ function ReceivingView({
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
+                  <label className="block text-xs font-semibold text-[#42566c] mb-1">Case No *</label>
+                  <input
+                    type="text"
+                    value={caseNo}
+                    onChange={(e) => setCaseNo(e.target.value)}
+                    required
+                    placeholder="e.g. CASE-001 or CS-10"
+                    className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono uppercase bg-white focus:outline-none focus:ring-2 focus:ring-[#2463a6]"
+                  />
+                </div>
+                <div>
                   <label className="block text-xs font-semibold text-[#42566c] mb-1">Received Quantity *</label>
                   <input
                     type="number"
@@ -2441,49 +3311,26 @@ function ReceivingView({
                     onChange={(e) => setQty(e.target.value === "" ? "" : Number(e.target.value))}
                     required
                     placeholder="e.g. 100"
-                    className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono"
+                    className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[#2463a6]"
                   />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-[#42566c] mb-1">Destination Location / Bay</label>
-                  <input
-                    type="text"
-                    list="locsReceivingList"
-                    value={loc}
-                    onChange={(e) => setLoc(e.target.value)}
-                    placeholder="e.g. A-01-01 or RECV-01"
-                    className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm bg-white font-mono"
-                  />
-                  <datalist id="locsReceivingList">
-                    {allLocs().map((l) => (
-                      <option key={l} value={l} />
-                    ))}
-                  </datalist>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-[#42566c] mb-1">Batch No / Lot No *</label>
-                  <input
-                    type="text"
-                    value={batchNo}
-                    onChange={(e) => setBatchNo(e.target.value)}
-                    required
-                    placeholder="e.g. LOT-202610-01"
-                    className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono bg-white uppercase"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-[#42566c] mb-1">DO / Supplier Reference</label>
-                  <input
-                    type="text"
-                    value={ref}
-                    onChange={(e) => setRef(e.target.value)}
-                    placeholder="e.g. DO-8802"
-                    className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono"
-                  />
-                </div>
+              <div>
+                <label className="block text-xs font-semibold text-[#42566c] mb-1">Destination Location / Bay</label>
+                <input
+                  type="text"
+                  list="locsReceivingList"
+                  value={loc}
+                  onChange={(e) => setLoc(e.target.value)}
+                  placeholder="e.g. A-01-01 or RECV-01"
+                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm bg-white font-mono focus:outline-none focus:ring-2 focus:ring-[#2463a6]"
+                />
+                <datalist id="locsReceivingList">
+                  {allLocs().map((l) => (
+                    <option key={l} value={l} />
+                  ))}
+                </datalist>
               </div>
 
               <button
@@ -2495,36 +3342,6 @@ function ReceivingView({
             </form>
           )}
         </div>
-
-        {/* RIGHT SIDE: RECEIVING GUIDELINES & RECENT RECEIPTS */}
-        <div className="space-y-6">
-          <div className="bg-white border border-[#dfe6ee] rounded-2xl p-6 shadow-xs">
-            <h3 className="text-base font-semibold text-[#18324d] mb-3">Receiving Workflow Notice</h3>
-            <div className="p-4 bg-[#f4f7fb] rounded-xl space-y-2 text-xs text-[#42566c]">
-              <div className="flex justify-between">
-                <span>1. New Container Setup</span>
-                <strong className="text-[#18324d]">Popup via button</strong>
-              </div>
-              <div className="flex justify-between">
-                <span>2. Key-In Stage</span>
-                <strong className="text-red-700 font-semibold">Saved in Red Area (Staging)</strong>
-              </div>
-              <div className="flex justify-between">
-                <span>3. Check & Confirm</span>
-                <strong className="text-emerald-700 font-semibold">Sent to Inventory</strong>
-              </div>
-            </div>
-            <p className="text-xs text-[#65768a] mt-3 leading-relaxed">
-              Parts keyed in are temporarily staged in the red highlight area below. You can inspect or edit quantities before final confirmation. Inventory is only credited upon clicking <strong>Confirm & Complete Container</strong>.
-            </p>
-          </div>
-
-          <div className="bg-white border border-[#dfe6ee] rounded-2xl p-6 shadow-xs">
-            <h3 className="text-base font-semibold text-[#18324d] mb-3">Recently Received Shipments</h3>
-            <TxTable transactions={transactions.filter((t) => t.type === "Receiving").slice(0, 4)} />
-          </div>
-        </div>
-      </div>
 
       {/* THE RED HIGHLIGHT AREA (Request 6: Temporary staging for current container receiving) */}
       <div className="border-2 border-red-500 rounded-2xl bg-gradient-to-b from-red-50/90 via-red-50/40 to-white p-6 shadow-md space-y-5">
@@ -2572,6 +3389,7 @@ function ReceivingView({
                 <th className="p-3">Time Stamp</th>
                 <th className="p-3">Part No</th>
                 <th className="p-3">Description</th>
+                <th className="p-3 bg-red-200/50 text-red-950 font-bold">Case No</th>
                 <th className="p-3">Model</th>
                 <th className="p-3">Batch No</th>
                 <th className="p-3 text-red-800 font-extrabold">Received Qty</th>
@@ -2583,7 +3401,7 @@ function ReceivingView({
             <tbody className="divide-y divide-red-100 text-xs">
               {stagedItems.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="text-center py-8 text-red-800/80 bg-red-50/30">
+                  <td colSpan={11} className="text-center py-8 text-red-800/80 bg-red-50/30">
                     <div className="font-semibold text-sm text-red-900">
                       {activeContainer
                         ? `No parts added to Container ${activeContainer.containerNo} yet.`
@@ -2591,7 +3409,7 @@ function ReceivingView({
                     </div>
                     <div className="text-xs text-red-700 mt-1">
                       {activeContainer
-                        ? "Key in the part number and quantity above, then click '+ Add Part to Container' to stage items here."
+                        ? "Key in the part number, case number and quantity above, then click '+ Add Part to Container' to stage items here."
                         : "Click '+ New Container' above to open the popup and start receiving."}
                     </div>
                   </td>
@@ -2609,6 +3427,15 @@ function ReceivingView({
                     <td className="p-3 font-mono font-bold text-[#18324d]">{item.code}</td>
                     <td className="p-3 font-medium text-[#18324d] max-w-[200px] truncate" title={item.desc}>
                       {item.desc}
+                    </td>
+                    <td className="p-3 font-mono">
+                      {item.caseNo && item.caseNo !== "—" ? (
+                        <span className="inline-block px-2 py-0.5 bg-white text-blue-900 rounded font-bold border border-blue-200 text-[11px] shadow-2xs">
+                          {item.caseNo}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
                     </td>
                     <td className="p-3 font-medium text-[#65768a]">{item.model || "—"}</td>
                     <td className="p-3 font-mono">
@@ -2714,13 +3541,73 @@ function IssueView({
   setPage?: (p: Page) => void;
 }) {
   const [codeQuery, setCodeQuery] = useState("");
-  const [sourceLoc, setSourceLoc] = useState("A-01-01");
+  const [sourceLoc, setSourceLoc] = useState("KITTING-STATION");
   const [qty, setQty] = useState<number | "">("");
   const [destLine, setDestLine] = useState("Production Line 1");
   const [ref, setRef] = useState("");
   const [batchNo, setBatchNo] = useState("");
   const [userId, setUserId] = useState(role === "Admin" ? "ADMIN-DEMO" : role === "Manager" ? "MGR-DEMO" : "WH001");
   const [notice, setNotice] = useState<{ msg: string; type: "success" | "error" } | null>(null);
+
+  // ONLY parts confirmed and unpacked from Kitting-Unpack station
+  const unpackedReadyParts = useMemo(() => {
+    const list: Array<{
+      txId: string;
+      code: string;
+      partName: string;
+      desc: string;
+      batchNo: string;
+      caseNo: string;
+      qty: number;
+      loc: string;
+      unpackedByName: string;
+      unpackDate: string;
+    }> = [];
+
+    // Find all receiving / kitting transactions marked unpacked === true
+    const unpackedTxs = transactions.filter(
+      (t) =>
+        t.unpacked === true &&
+        (t.type === "Receiving" || t.id.startsWith("KIT-") || t.id.startsWith("RCV-"))
+    );
+
+    unpackedTxs.forEach((tx) => {
+      // Find current stock at Kitting location or general inventory for this code & batch
+      const kittingBal = balances.find(
+        (b) =>
+          b.code.toUpperCase() === tx.code.toUpperCase() &&
+          String(b.batchNo || "").trim().toLowerCase() === String(tx.batchNo || "").trim().toLowerCase() &&
+          (b.loc.toUpperCase().includes("KITTING") || b.loc === tx.dest) &&
+          b.qty > 0
+      );
+      const generalBal = balances.find(
+        (b) =>
+          b.code.toUpperCase() === tx.code.toUpperCase() &&
+          String(b.batchNo || "").trim().toLowerCase() === String(tx.batchNo || "").trim().toLowerCase() &&
+          b.qty > 0
+      );
+
+      const bal = kittingBal || generalBal;
+      const availableQty = bal ? bal.qty : tx.qty;
+
+      if (availableQty > 0) {
+        list.push({
+          txId: tx.id,
+          code: tx.code,
+          partName: tx.partName || tx.desc || items.find((i) => i.code === tx.code)?.desc || tx.code,
+          desc: tx.desc || tx.partName || items.find((i) => i.code === tx.code)?.desc || tx.code,
+          batchNo: tx.batchNo || "—",
+          caseNo: tx.caseNo || "—",
+          qty: availableQty,
+          loc: bal ? bal.loc : (tx.dest || "KITTING-STATION"),
+          unpackedByName: tx.unpackedByName || tx.user || "Kitting Operator",
+          unpackDate: tx.unpackDate || tx.time || "Today",
+        });
+      }
+    });
+
+    return list;
+  }, [transactions, balances, items]);
 
   const matchedItem = items.find(
     (i) => i.active && i.code.trim().toLowerCase() === codeQuery.trim().toLowerCase()
@@ -2759,9 +3646,22 @@ function IssueView({
     e.preventDefault();
     setNotice(null);
     if (!matchedItem) {
-      setNotice({ msg: "Part not found or inactive.", type: "error" });
+      setNotice({ msg: "Please select an unpacked part from the list.", type: "error" });
       return;
     }
+
+    // Enforce: ONLY parts confirmed from Kitting-Unpack can be sent to production
+    const isConfirmedUnpacked = unpackedReadyParts.some(
+      (p) => p.code.toUpperCase() === matchedItem.code.toUpperCase()
+    );
+    if (!isConfirmedUnpacked) {
+      setNotice({
+        msg: `Error: Item "${matchedItem.code}" has not been confirmed from Kitting-Unpack. Only parts confirmed and unpacked from 'Kitting-Unpack' can be sent to production!`,
+        type: "error",
+      });
+      return;
+    }
+
     if (!(qNum > 0 && Number.isFinite(qNum))) {
       setNotice({ msg: "Enter a valid quantity greater than zero.", type: "error" });
       return;
@@ -2773,33 +3673,11 @@ function IssueView({
 
     const currentLocStock = stock(matchedItem.code, targetLoc);
     if (currentLocStock < qNum) {
-      const allLocDetails = balances
-        .filter((b) => b.code.trim().toUpperCase() === matchedItem.code.trim().toUpperCase() && b.qty > 0)
-        .map((b) => `${b.loc}: ${b.qty}`)
-        .join(", ");
       setNotice({
-        msg: `Insufficient stock at location "${targetLoc}". Available: ${currentLocStock}. (In storage: ${allLocDetails || "0"})`,
+        msg: `Insufficient stock at location "${targetLoc}". Available: ${currentLocStock}.`,
         type: "error",
       });
       return;
-    }
-
-    // Enforce: Only items unpacked can be sent to production
-    const matchedReceivingTxs = transactions.filter(
-      (t) =>
-        t.type === "Receiving" &&
-        t.code.trim().toUpperCase() === matchedItem.code.trim().toUpperCase() &&
-        (batchNo ? (t.batchNo && t.batchNo.trim().toLowerCase() === batchNo.trim().toLowerCase()) : true)
-    );
-    if (matchedReceivingTxs.length > 0) {
-      const isAnyUnpacked = matchedReceivingTxs.some((t) => t.unpacked === true);
-      if (!isAnyUnpacked) {
-        setNotice({
-          msg: `Error: Item "${matchedItem.code}" (Batch: ${batchNo || "N/A"}) is pending unpack at the Sent to Unpack station. Only items that have been unpacked and decanted can be sent to production!`,
-          type: "error",
-        });
-        return;
-      }
     }
 
     const id = txNo("ISS");
@@ -2817,12 +3695,12 @@ function IssueView({
       ref: ref.trim(),
       user: userId.trim(),
       receiverName: destLine.includes("Line 1") ? "Production Line 1 Operator" : "Production Operator",
-      time: new Date().toLocaleString(),
+      time: formatTimestamp(),
       status: "Posted",
     };
     setTransactions([newTx, ...transactions]);
     setNotice({
-      msg: `Production issue posted successfully. Transaction ${id} (Batch: ${batchNo || "N/A"}). Remaining stock at ${targetLoc}: ${currentLocStock - qNum}.`,
+      msg: `✓ Production issue posted successfully! Transaction ${id} (${qNum} pcs of ${matchedItem.code} sent to ${destLine}). Remaining at ${targetLoc}: ${currentLocStock - qNum}.`,
       type: "success",
     });
     setCodeQuery("");
@@ -2836,7 +3714,9 @@ function IssueView({
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h2 className="text-2xl font-bold text-[#18324d]">Send Parts to Production</h2>
-          <p className="text-sm text-[#65768a]">Issue material from storage locations to assembly and production lines.</p>
+          <p className="text-sm text-[#65768a]">
+            Issue confirmed unpacked parts from Kitting-Unpack to assembly and production lines.
+          </p>
         </div>
         <div className="flex items-center gap-2">
           {setPage && (
@@ -2853,102 +3733,189 @@ function IssueView({
         </div>
       </div>
 
+      {notice && (
+        <div
+          className={`p-4 rounded-xl text-xs font-semibold ${
+            notice.type === "success"
+              ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
+              : "bg-red-50 text-red-700 border border-red-200"
+          }`}
+        >
+          {notice.msg}
+        </div>
+      )}
+
+      {/* TABLE: Confirmed Unpacked Parts Ready for Production */}
+      <div className="bg-white border-2 border-emerald-300 rounded-2xl p-6 shadow-xs space-y-4">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+          <div>
+            <h3 className="text-base font-bold text-[#18324d] flex items-center gap-2">
+              <PackageCheck size={20} className="text-emerald-600" />
+              Confirmed Parts Ready to Send to Production
+            </h3>
+            <p className="text-xs text-[#65768a]">
+              Parts will only show here after they are confirmed from <strong>"Kitting-Unpack"</strong>.
+            </p>
+          </div>
+          <span className="px-3 py-1 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-full text-xs font-bold">
+            {unpackedReadyParts.length} item(s) ready
+          </span>
+        </div>
+
+        {unpackedReadyParts.length === 0 ? (
+          <div className="p-8 text-center bg-[#f8fafc] border border-dashed border-[#cfd9e4] rounded-xl space-y-2">
+            <div className="text-xs font-bold text-[#18324d]">No Parts Ready for Production Yet</div>
+            <p className="text-xs text-[#65768a] max-w-md mx-auto">
+              Parts must first be confirmed from <strong>"Kitting Case"</strong> and then unpacked & confirmed by operator at <strong>"Kitting-Unpack"</strong> before they appear here.
+            </p>
+            {setPage && (
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={() => setPage("unpack")}
+                  className="px-4 py-2 bg-[#2463a6] hover:bg-[#1d528a] text-white rounded-xl text-xs font-semibold"
+                >
+                  Go to Kitting-Unpack Station →
+                </button>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="overflow-x-auto border border-[#dfe6ee] rounded-xl">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-[#f4f7fb] text-[#65768a] uppercase font-semibold border-b border-[#dfe6ee]">
+                <tr>
+                  <th className="p-3">Part No & Description</th>
+                  <th className="p-3">Batch No</th>
+                  <th className="p-3">Case No</th>
+                  <th className="p-3">Staging Location</th>
+                  <th className="p-3">Unpacked Qty Available</th>
+                  <th className="p-3">Unpacked By & Date</th>
+                  <th className="p-3 text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#f0f4f8]">
+                {unpackedReadyParts.map((p, idx) => (
+                  <tr key={`${p.code}-${p.batchNo}-${idx}`} className="hover:bg-blue-50/20 transition">
+                    <td className="p-3">
+                      <div className="font-mono font-bold text-[#18324d]">{p.code}</div>
+                      <div className="text-[11px] text-[#42566c]">{p.partName}</div>
+                    </td>
+                    <td className="p-3 font-mono font-bold text-blue-800">{p.batchNo}</td>
+                    <td className="p-3 font-mono">
+                      {p.caseNo && p.caseNo !== "—" ? (
+                        <span className="px-2 py-0.5 bg-blue-50 text-blue-900 rounded font-semibold border border-blue-200 text-[11px]">
+                          {p.caseNo}
+                        </span>
+                      ) : (
+                        <span className="text-[#a0aec0]">—</span>
+                      )}
+                    </td>
+                    <td className="p-3 font-mono text-purple-800 font-semibold">{p.loc}</td>
+                    <td className="p-3 font-mono font-bold text-emerald-700 text-sm">
+                      {p.qty.toLocaleString()} pcs
+                    </td>
+                    <td className="p-3 text-[#65768a] text-[11px]">
+                      <div>By {p.unpackedByName}</div>
+                      <div>{p.unpackDate}</div>
+                    </td>
+                    <td className="p-3 text-right">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCodeQuery(p.code);
+                          setBatchNo(p.batchNo !== "—" ? p.batchNo : "");
+                          setSourceLoc(p.loc);
+                          setQty(p.qty);
+                          setNotice({
+                            msg: `Selected ${p.code} (${p.partName}) from Batch ${p.batchNo}. Please choose destination line and confirm issue below.`,
+                            type: "success",
+                          });
+                        }}
+                        className="px-3 py-1.5 bg-[#2463a6] hover:bg-[#1d528a] text-white rounded-lg text-xs font-bold shadow-xs transition inline-flex items-center gap-1"
+                      >
+                        ↗ Issue to Line
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white border border-[#dfe6ee] rounded-2xl p-6 shadow-xs">
           <h3 className="text-base font-semibold text-[#18324d] mb-4">Production Issue Form</h3>
 
-          {notice && (
-            <div
-              className={`p-3 rounded-xl text-xs mb-4 ${
-                notice.type === "success"
-                  ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
-                  : "bg-red-50 text-red-700 border border-red-200"
-              }`}
-            >
-              {notice.msg}
-            </div>
-          )}
-
           <form onSubmit={handleIssue} className="space-y-4">
             <div>
-              <label className="block text-xs font-semibold text-[#42566c] mb-1">Enter Part No *</label>
-              <input
-                type="text"
-                list="issueItems"
-                value={codeQuery}
-                onChange={(e) => setCodeQuery(e.target.value)}
-                required
-                placeholder="Enter part no..."
-                className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono"
-              />
-              <datalist id="issueItems">
-                {items
-                  .filter((i) => i.active)
-                  .map((i) => (
-                    <option key={i.code} value={i.code}>
-                      {i.desc}
+              <label className="block text-xs font-semibold text-[#42566c] mb-1">
+                Select Part (Confirmed from Kitting-Unpack) *
+              </label>
+              {unpackedReadyParts.length === 0 ? (
+                <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl text-xs font-semibold">
+                  ⚠️ No parts have been unpacked and confirmed yet. Please confirm parts in "Kitting Case" and unpack in "Kitting-Unpack" first.
+                </div>
+              ) : (
+                <select
+                  value={codeQuery}
+                  onChange={(e) => {
+                    const selected = e.target.value;
+                    setCodeQuery(selected);
+                    const chosen = unpackedReadyParts.find((p) => p.code === selected);
+                    if (chosen) {
+                      setBatchNo(chosen.batchNo !== "—" ? chosen.batchNo : "");
+                      setSourceLoc(chosen.loc);
+                      setQty(chosen.qty);
+                    }
+                  }}
+                  required
+                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono font-bold bg-white text-[#18324d] focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">-- Choose Confirmed Unpacked Part to Send to Production --</option>
+                  {unpackedReadyParts.map((p, idx) => (
+                    <option key={`${p.code}-${p.batchNo}-${idx}`} value={p.code}>
+                      {p.code} — {p.partName} (Batch: {p.batchNo}, Avail: {p.qty} pcs at {p.loc})
                     </option>
                   ))}
-              </datalist>
+                </select>
+              )}
             </div>
 
-            {codeQuery && (
-              <div>
-                {matchedItem ? (
-                  <div className="space-y-3">
-                    <div className="p-3 bg-emerald-50/50 border border-emerald-200 rounded-xl text-xs space-y-1">
-                      <div className="font-bold text-emerald-900">{matchedItem.desc}</div>
-                      <div className="text-emerald-700 font-mono">
-                        {matchedItem.code} · Total In Stock: {stock(matchedItem.code)}
-                      </div>
-                      <div className="text-[11px] text-[#2463a6] font-semibold pt-1">
-                        Storage Location Breakdown:{" "}
-                        {balances
-                          .filter((b) => b.code.trim().toUpperCase() === matchedItem.code.trim().toUpperCase() && b.qty > 0)
-                          .map((b) => `${b.loc} (${b.qty})`)
-                          .join(", ") || "No stock in storage"}
-                      </div>
-                    </div>
+            {codeQuery && matchedItem && (
+              <div className="space-y-3">
+                <div className="p-3 bg-emerald-50/50 border border-emerald-200 rounded-xl text-xs space-y-1">
+                  <div className="font-bold text-emerald-900">{matchedItem.desc}</div>
+                  <div className="text-emerald-700 font-mono">
+                    {matchedItem.code} · Available to Send: {stock(matchedItem.code, targetLoc)} pcs
+                  </div>
+                  <div className="text-[11px] text-[#2463a6] font-semibold pt-1">
+                    Confirmed from Kitting-Unpack at {targetLoc} (Batch: {batchNo || "N/A"})
+                  </div>
+                </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs font-semibold text-[#42566c] mb-1">Part Name</label>
-                        <input
-                          type="text"
-                          readOnly
-                          value={matchedItem.desc}
-                          className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm bg-gray-50 text-[#18324d] font-medium"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-semibold text-[#42566c] mb-1">Batch No / Lot No</label>
-                        <input
-                          type="text"
-                          list="issueBatchList"
-                          value={batchNo}
-                          onChange={(e) => setBatchNo(e.target.value)}
-                          placeholder="e.g. BATCH-202610-01"
-                          className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono bg-white"
-                        />
-                        <datalist id="issueBatchList">
-                          {Array.from(
-                            new Set(
-                              transactions
-                                .filter((t) => t.type === "Receiving" && t.code === matchedItem.code && t.unpacked && t.batchNo)
-                                .map((t) => t.batchNo as string)
-                            )
-                          ).map((b) => (
-                            <option key={b} value={b} />
-                          ))}
-                        </datalist>
-                      </div>
-                    </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-[#42566c] mb-1">Part Name</label>
+                    <input
+                      type="text"
+                      readOnly
+                      value={matchedItem.desc}
+                      className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm bg-gray-50 text-[#18324d] font-medium"
+                    />
                   </div>
-                ) : (
-                  <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs">
-                    Part not found or inactive.
+                  <div>
+                    <label className="block text-xs font-semibold text-[#42566c] mb-1">Batch No / Lot No</label>
+                    <input
+                      type="text"
+                      readOnly
+                      value={batchNo}
+                      className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono bg-gray-50 text-[#18324d]"
+                    />
                   </div>
-                )}
+                </div>
               </div>
             )}
 
@@ -3026,9 +3993,14 @@ function IssueView({
 
             <button
               type="submit"
-              className="w-full py-3 bg-[#2463a6] text-white rounded-xl text-xs font-semibold hover:opacity-95 shadow-xs transition"
+              disabled={unpackedReadyParts.length === 0}
+              className={`w-full py-3 text-white rounded-xl text-xs font-semibold shadow-xs transition ${
+                unpackedReadyParts.length === 0
+                  ? "bg-gray-300 cursor-not-allowed"
+                  : "bg-[#2463a6] hover:bg-[#1d528a]"
+              }`}
             >
-              ↗ Confirm & Post Issue
+              ↗ Confirm & Post Issue to Production
             </button>
           </form>
         </div>
@@ -3063,7 +4035,9 @@ function IssueView({
                   </div>
                 </>
               ) : (
-                <div className="text-center py-6 text-[#65768a]">Select an active part to view real-time balance.</div>
+                <div className="text-center py-6 text-[#65768a]">
+                  Select an unpacked part above to view real-time balance.
+                </div>
               )}
             </div>
           </div>
@@ -3081,6 +4055,9 @@ function IssueView({
 /* -------------------------------------------------------------------------- */
 /* RETURN FROM PRODUCTION VIEW                                                */
 /* -------------------------------------------------------------------------- */
+/* -------------------------------------------------------------------------- */
+/* RETURN FROM PRODUCTION VIEW                                                */
+/* -------------------------------------------------------------------------- */
 function ReturnView({
   items,
   balances,
@@ -3090,6 +4067,7 @@ function ReturnView({
   allLocs,
   stock,
   role,
+  setPage,
 }: {
   items: Item[];
   balances: Balance[];
@@ -3097,8 +4075,9 @@ function ReturnView({
   transactions: Transaction[];
   setTransactions: React.Dispatch<React.SetStateAction<Transaction[]>>;
   allLocs: () => string[];
-  stock: (code: string) => number;
+  stock: (code: string, loc?: string) => number;
   role: Role;
+  setPage?: (p: Page) => void;
 }) {
   const [codeQuery, setCodeQuery] = useState("");
   const [sourceLine, setSourceLine] = useState("Production Line 1");
@@ -3107,32 +4086,235 @@ function ReturnView({
   const [ref, setRef] = useState("");
   const [batchNo, setBatchNo] = useState("");
   const [userId, setUserId] = useState(role === "Admin" ? "ADMIN-DEMO" : role === "Manager" ? "MGR-DEMO" : "WH001");
-  const [notice, setNotice] = useState<{ msg: string; type: "success" | "error" } | null>(null);
+  const [notice, setNotice] = useState<{ msg: string; type: "success" | "error" | "warning" } | null>(null);
+  const [searchFilter, setSearchFilter] = useState("");
+  const [lineFilter, setLineFilter] = useState("ALL");
+  const formRef = useRef<HTMLDivElement>(null);
 
-  const matchedItem = items.find(
-    (i) => i.active && i.code.toLowerCase() === codeQuery.trim().toLowerCase()
-  );
+  // 1. Transactions confirmed and sent to production
+  const productionIssues = useMemo(() => {
+    return transactions.filter(
+      (t) => t.type === "Production Issue" && (t.status === "Posted" || !t.status)
+    );
+  }, [transactions]);
+
+  // 2. Transactions returned from production back into warehouse inventory
+  const stockReturns = useMemo(() => {
+    return transactions.filter(
+      (t) => t.type === "Stock Return" && (t.status === "Posted" || !t.status)
+    );
+  }, [transactions]);
+
+  // 3. Compute active production balances: (Sent to Production) minus (Stock Returns)
+  const productionSummary = useMemo(() => {
+    // Key: CODE__BATCH__LINE
+    const map = new Map<
+      string,
+      {
+        key: string;
+        code: string;
+        partName: string;
+        batchNo: string;
+        line: string;
+        sentQty: number;
+        returnedQty: number;
+        returnableQty: number;
+        sampleRef: string;
+        lastIssueTime: string;
+      }
+    >();
+
+    for (const iss of productionIssues) {
+      const c = iss.code.trim().toUpperCase();
+      const b = (iss.batchNo || "NO-BATCH").trim();
+      const l = (iss.dest || "Production Line 1").trim();
+      const key = `${c}__${b.toUpperCase()}__${l.toUpperCase()}`;
+
+      const existing = map.get(key) || {
+        key,
+        code: c,
+        partName: iss.partName || iss.desc || c,
+        batchNo: iss.batchNo || "NO-BATCH",
+        line: l,
+        sentQty: 0,
+        returnedQty: 0,
+        returnableQty: 0,
+        sampleRef: iss.ref || iss.id,
+        lastIssueTime: iss.time,
+      };
+
+      existing.sentQty += iss.qty || 0;
+      if (iss.time > existing.lastIssueTime) {
+        existing.lastIssueTime = iss.time;
+        existing.sampleRef = iss.ref || iss.id;
+      }
+      map.set(key, existing);
+    }
+
+    // Deduct returns
+    for (const ret of stockReturns) {
+      const c = ret.code.trim().toUpperCase();
+      const b = (ret.batchNo || "NO-BATCH").trim();
+      const l = (ret.source || "Production Line 1").trim();
+      const key = `${c}__${b.toUpperCase()}__${l.toUpperCase()}`;
+
+      const existing = map.get(key);
+      if (existing) {
+        existing.returnedQty += ret.qty || 0;
+      } else {
+        // Fallback match by code & line
+        for (const val of map.values()) {
+          if (val.code === c && val.line.toUpperCase() === l.toUpperCase()) {
+            val.returnedQty += ret.qty || 0;
+            break;
+          }
+        }
+      }
+    }
+
+    // Calculate net returnable quantity in production
+    for (const val of map.values()) {
+      val.returnableQty = Math.max(0, val.sentQty - val.returnedQty);
+    }
+
+    return Array.from(map.values());
+  }, [productionIssues, stockReturns]);
+
+  // Eligible production parts with returnableQty > 0
+  const eligibleProductionParts = useMemo(() => {
+    return productionSummary
+      .filter((p) => p.returnableQty > 0)
+      .map((p) => {
+        const itemInfo = items.find(
+          (i) => i.code.trim().toUpperCase() === p.code.trim().toUpperCase()
+        );
+        return {
+          ...p,
+          desc: itemInfo?.desc || p.partName,
+          model: itemInfo?.model || "Universal",
+        };
+      });
+  }, [productionSummary, items]);
+
+  // Filtered view for the production parts table
+  const displayedProductionParts = useMemo(() => {
+    return eligibleProductionParts.filter((p) => {
+      const matchesLine = lineFilter === "ALL" || p.line.toLowerCase() === lineFilter.toLowerCase();
+      const matchesSearch =
+        !searchFilter.trim() ||
+        p.code.toLowerCase().includes(searchFilter.toLowerCase()) ||
+        p.desc.toLowerCase().includes(searchFilter.toLowerCase()) ||
+        p.batchNo.toLowerCase().includes(searchFilter.toLowerCase()) ||
+        p.sampleRef.toLowerCase().includes(searchFilter.toLowerCase());
+      return matchesLine && matchesSearch;
+    });
+  }, [eligibleProductionParts, lineFilter, searchFilter]);
+
+  // Unique list of part codes that have been confirmed in "Sent to Production" and are currently returnable
+  const allowedPartCodes = useMemo(() => {
+    return Array.from(new Set(eligibleProductionParts.map((p) => p.code.toUpperCase())));
+  }, [eligibleProductionParts]);
+
+  // Total summary figures
+  const totalUnitsInProduction = useMemo(() => {
+    return eligibleProductionParts.reduce((sum, p) => sum + p.returnableQty, 0);
+  }, [eligibleProductionParts]);
+
+  const totalReturnedUnits = useMemo(() => {
+    return stockReturns.reduce((sum, r) => sum + (r.qty || 0), 0);
+  }, [stockReturns]);
+
+  // Selected item matching
+  const matchedItem = useMemo(() => {
+    if (!codeQuery.trim()) return null;
+    return items.find((i) => i.code.trim().toUpperCase() === codeQuery.trim().toUpperCase());
+  }, [items, codeQuery]);
+
+  // Is this part confirmed in "Sent to Production"?
+  const isConfirmedInProduction = useMemo(() => {
+    if (!codeQuery.trim()) return false;
+    return allowedPartCodes.includes(codeQuery.trim().toUpperCase());
+  }, [allowedPartCodes, codeQuery]);
+
+  // Batches available in production for the selected part
+  const availableBatchesForSelectedPart = useMemo(() => {
+    if (!codeQuery.trim()) return [];
+    return eligibleProductionParts.filter(
+      (p) => p.code.toUpperCase() === codeQuery.trim().toUpperCase()
+    );
+  }, [eligibleProductionParts, codeQuery]);
+
+  // Current returnable qty for the chosen part & batch & line
+  const activeReturnableQty = useMemo(() => {
+    if (!isConfirmedInProduction) return 0;
+    const match = availableBatchesForSelectedPart.find(
+      (p) =>
+        (batchNo ? p.batchNo.toLowerCase() === batchNo.trim().toLowerCase() : true) &&
+        (sourceLine ? p.line.toLowerCase() === sourceLine.trim().toLowerCase() : true)
+    ) || availableBatchesForSelectedPart[0];
+    return match ? match.returnableQty : 0;
+  }, [isConfirmedInProduction, availableBatchesForSelectedPart, batchNo, sourceLine]);
+
+  // Quick prefill from the table
+  const handleSelectForReturn = (part: typeof eligibleProductionParts[0]) => {
+    setCodeQuery(part.code);
+    setBatchNo(part.batchNo === "NO-BATCH" ? "" : part.batchNo);
+    setSourceLine(part.line);
+    setRef(`RET-from-${part.sampleRef}`);
+    setQty(part.returnableQty);
+    setNotice(null);
+    if (formRef.current) {
+      formRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  };
 
   const handleReturn = (e: React.FormEvent) => {
     e.preventDefault();
     setNotice(null);
-    if (!matchedItem) {
-      setNotice({ msg: "Part not found or inactive.", type: "error" });
+
+    if (!codeQuery.trim()) {
+      setNotice({ msg: "Please select a part confirmed in 'Sent to Production'.", type: "error" });
       return;
     }
+
+    // STRICT ENFORCEMENT: ONLY parts confirmed in "Sent to Production" can return from production
+    if (!isConfirmedInProduction || !matchedItem) {
+      setNotice({
+        msg: `Error: Part "${codeQuery.trim().toUpperCase()}" has not been confirmed in "Sent to Production". Only parts that were confirmed and sent to production can be returned from production!`,
+        type: "error",
+      });
+      return;
+    }
+
     const qNum = Number(qty);
     if (!(qNum > 0 && Number.isFinite(qNum))) {
       setNotice({ msg: "Enter a valid return quantity greater than zero.", type: "error" });
       return;
     }
+
+    // Quantity cannot exceed what is confirmed in production
+    if (qNum > activeReturnableQty) {
+      setNotice({
+        msg: `Cannot return ${qNum} pcs. Only ${activeReturnableQty} pcs remain in production for ${matchedItem.code} (${batchNo ? `Batch: ${batchNo}` : "active batch"}).`,
+        type: "error",
+      });
+      return;
+    }
+
     if (!ref.trim() || !userId.trim()) {
-      setNotice({ msg: "Reference and user ID are required.", type: "error" });
+      setNotice({ msg: "Production return reference and warehouse user ID are required.", type: "error" });
       return;
     }
 
     const finalDest = destLoc.trim() || "A-01-01";
     const id = txNo("RET");
-    setBalances(upsertBalance(balances, matchedItem.code, finalDest, qNum));
+
+    // Add the part returned from production back to inventory balances
+    setBalances((prev) =>
+      upsertBalance(prev, matchedItem.code, finalDest, qNum, batchNo.trim() || undefined)
+    );
+
+    // Record the Stock Return transaction
     const newTx: Transaction = {
       id,
       type: "Stock Return",
@@ -3145,14 +4327,22 @@ function ReturnView({
       dest: finalDest,
       ref: ref.trim(),
       user: userId.trim(),
-      time: new Date().toLocaleString(),
+      receiverName: userId.trim(),
+      time: formatTimestamp(),
       status: "Posted",
     };
-    setTransactions([newTx, ...transactions]);
+
+    setTransactions((prev) => [newTx, ...prev]);
+
+    const updatedStockAtDest = stock(matchedItem.code, finalDest) + qNum;
+    const updatedTotalStock = stock(matchedItem.code) + qNum;
+
     setNotice({
-      msg: `Stock return posted successfully. Transaction ${id} (Batch: ${batchNo || "N/A"}). Updated stock for ${matchedItem.code}: ${stock(matchedItem.code) + qNum}.`,
+      msg: `✓ Stock return posted successfully! Transaction ${id}: ${qNum} pcs of ${matchedItem.code} returned from ${sourceLine} and added back to inventory at ${finalDest}. Updated inventory at ${finalDest}: ${updatedStockAtDest} pcs (Total on-hand: ${updatedTotalStock} pcs).`,
       type: "success",
     });
+
+    // Reset form fields
     setCodeQuery("");
     setBatchNo("");
     setQty("");
@@ -3161,111 +4351,376 @@ function ReturnView({
 
   return (
     <div className="space-y-6">
+      {/* HEADER */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h2 className="text-2xl font-bold text-[#18324d]">Return from Production</h2>
-          <p className="text-sm text-[#65768a]">Keep unused production balance back into warehouse stock locations.</p>
+          <div className="flex items-center gap-2">
+            <h2 className="text-2xl font-bold text-[#18324d]">Return from Production</h2>
+            <span className="px-2.5 py-0.5 bg-blue-100 text-blue-800 text-[11px] font-bold rounded-full">
+              Production Inbound
+            </span>
+          </div>
+          <p className="text-sm text-[#65768a] mt-1">
+            Return verified parts confirmed in <span className="font-semibold text-[#18324d]">"Sent to Production"</span> back into warehouse stock inventory.
+          </p>
         </div>
-        <span className="px-3 py-1 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-full text-xs font-bold">
-          Inbound return
-        </span>
+
+        <div className="flex items-center gap-2">
+          {setPage && (
+            <button
+              type="button"
+              onClick={() => setPage("issue")}
+              className="px-3.5 py-2 bg-white border border-[#cfd9e4] text-[#18324d] rounded-xl text-xs font-semibold hover:bg-slate-50 transition flex items-center gap-1.5 shadow-xs"
+            >
+              <ArrowUpRight size={14} className="text-amber-600" />
+              View Sent to Production
+            </button>
+          )}
+          {setPage && (
+            <button
+              type="button"
+              onClick={() => setPage("inventory")}
+              className="px-3.5 py-2 bg-[#18324d] text-white rounded-xl text-xs font-semibold hover:bg-[#234567] transition flex items-center gap-1.5 shadow-xs"
+            >
+              <Database size={14} />
+              Check Inventory
+            </button>
+          )}
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white border border-[#dfe6ee] rounded-2xl p-6 shadow-xs">
-          <h3 className="text-base font-semibold text-[#18324d] mb-4">Stock Return Form</h3>
+      {/* METRIC CARDS */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="bg-white border border-[#dfe6ee] rounded-2xl p-4 shadow-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-[#65768a]">Parts in Production</span>
+            <div className="p-2 bg-blue-50 text-blue-600 rounded-xl">
+              <Boxes size={18} />
+            </div>
+          </div>
+          <div className="text-2xl font-bold text-[#18324d] mt-2">
+            {eligibleProductionParts.length}
+          </div>
+          <p className="text-xs text-[#65768a] mt-1">Confirmed lines eligible for return</p>
+        </div>
+
+        <div className="bg-white border border-[#dfe6ee] rounded-2xl p-4 shadow-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-[#65768a]">Total Units in Production</span>
+            <div className="p-2 bg-amber-50 text-amber-600 rounded-xl">
+              <ArrowUpRight size={18} />
+            </div>
+          </div>
+          <div className="text-2xl font-bold text-amber-700 mt-2">
+            {totalUnitsInProduction.toLocaleString()} pcs
+          </div>
+          <p className="text-xs text-[#65768a] mt-1">Pending or returnable on lines</p>
+        </div>
+
+        <div className="bg-white border border-[#dfe6ee] rounded-2xl p-4 shadow-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-[#65768a]">Total Returned to Stock</span>
+            <div className="p-2 bg-emerald-50 text-emerald-600 rounded-xl">
+              <RotateCcw size={18} />
+            </div>
+          </div>
+          <div className="text-2xl font-bold text-emerald-700 mt-2">
+            {totalReturnedUnits.toLocaleString()} pcs
+          </div>
+          <p className="text-xs text-[#65768a] mt-1">Safely replenished into inventory</p>
+        </div>
+      </div>
+
+      {/* TABLE OF CONFIRMED PARTS IN PRODUCTION (ELIGIBLE FOR RETURN) */}
+      <div className="bg-white border border-[#dfe6ee] rounded-2xl p-5 shadow-xs space-y-4">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-base font-bold text-[#18324d]">
+                Confirmed Parts in Production (Eligible for Return)
+              </h3>
+              <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 text-[11px] font-bold rounded-full">
+                {displayedProductionParts.length} Available
+              </span>
+            </div>
+            <p className="text-xs text-[#65768a] mt-0.5">
+              Only parts confirmed in <span className="font-semibold text-[#18324d]">"Sent to Production"</span> can be returned. Click "Return from Line" to quickly fill the return form.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+            {/* Search */}
+            <div className="relative flex-1 md:w-48">
+              <Search size={14} className="absolute left-3 top-2.5 text-[#65768a]" />
+              <input
+                type="text"
+                placeholder="Search part, batch..."
+                value={searchFilter}
+                onChange={(e) => setSearchFilter(e.target.value)}
+                className="w-full pl-8 pr-3 py-1.5 border border-[#cfd9e4] rounded-xl text-xs font-mono"
+              />
+            </div>
+
+            {/* Line Filter */}
+            <select
+              value={lineFilter}
+              onChange={(e) => setLineFilter(e.target.value)}
+              className="px-3 py-1.5 border border-[#cfd9e4] rounded-xl text-xs bg-white text-[#18324d] font-medium"
+            >
+              <option value="ALL">All Production Lines</option>
+              <option value="Production Line 1">Production Line 1</option>
+              <option value="Production Line 2">Production Line 2</option>
+              <option value="Production Line 3">Production Line 3</option>
+              <option value="Assembly Line A">Assembly Line A</option>
+              <option value="Packaging Cell">Packaging Cell</option>
+            </select>
+          </div>
+        </div>
+
+        {displayedProductionParts.length === 0 ? (
+          <div className="p-8 text-center border border-dashed border-[#dfe6ee] rounded-xl bg-slate-50/50 space-y-3">
+            <div className="w-12 h-12 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center mx-auto">
+              <AlertCircle size={24} />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-[#18324d]">
+                {eligibleProductionParts.length === 0
+                  ? "No parts currently active in production."
+                  : "No production parts match your search filter."}
+              </p>
+              <p className="text-xs text-[#65768a] mt-1">
+                Only parts confirmed and issued through <span className="font-medium text-[#18324d]">"Sent to Production"</span> can be returned to warehouse inventory.
+              </p>
+            </div>
+            {setPage && eligibleProductionParts.length === 0 && (
+              <button
+                type="button"
+                onClick={() => setPage("issue")}
+                className="px-4 py-2 bg-[#2463a6] text-white rounded-xl text-xs font-semibold hover:opacity-95 transition inline-flex items-center gap-1.5 shadow-xs"
+              >
+                Go to Sent to Production →
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="overflow-x-auto border border-[#dfe6ee] rounded-xl">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="bg-[#f0f4f9] text-[#18324d] border-b border-[#dfe6ee]">
+                  <th className="py-2.5 px-3 font-semibold">Part Number & Description</th>
+                  <th className="py-2.5 px-3 font-semibold">Batch / Lot No</th>
+                  <th className="py-2.5 px-3 font-semibold">Production Line</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">Sent Qty</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">Already Returned</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">Returnable Qty</th>
+                  <th className="py-2.5 px-3 font-semibold">Issue Ref & Time</th>
+                  <th className="py-2.5 px-3 font-semibold text-center">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#dfe6ee]">
+                {displayedProductionParts.map((p) => (
+                  <tr key={p.key} className="hover:bg-blue-50/40 transition">
+                    <td className="py-2.5 px-3">
+                      <div className="font-mono font-bold text-[#18324d] flex items-center gap-1.5">
+                        <span className="px-1.5 py-0.5 bg-slate-100 border border-slate-200 rounded text-[11px]">
+                          {p.code}
+                        </span>
+                        <span className="font-sans font-medium text-slate-700">{p.desc}</span>
+                      </div>
+                      <div className="text-[10px] text-slate-500 mt-0.5 font-sans">Model: {p.model}</div>
+                    </td>
+                    <td className="py-2.5 px-3 font-mono">
+                      <span className="px-2 py-0.5 bg-amber-50 text-amber-800 border border-amber-200 rounded-md font-semibold">
+                        {p.batchNo}
+                      </span>
+                    </td>
+                    <td className="py-2.5 px-3 text-[#18324d] font-medium">{p.line}</td>
+                    <td className="py-2.5 px-3 text-right font-mono text-slate-600 font-medium">
+                      {p.sentQty.toLocaleString()} pcs
+                    </td>
+                    <td className="py-2.5 px-3 text-right font-mono text-slate-500">
+                      {p.returnedQty.toLocaleString()} pcs
+                    </td>
+                    <td className="py-2.5 px-3 text-right font-mono font-bold">
+                      <span className="px-2 py-0.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-md">
+                        {p.returnableQty.toLocaleString()} pcs
+                      </span>
+                    </td>
+                    <td className="py-2.5 px-3">
+                      <div className="font-mono text-[11px] text-[#18324d]">{p.sampleRef}</div>
+                      <div className="text-[10px] text-[#65768a]">{p.lastIssueTime}</div>
+                    </td>
+                    <td className="py-2.5 px-3 text-center">
+                      <button
+                        type="button"
+                        onClick={() => handleSelectForReturn(p)}
+                        className="px-3 py-1.5 bg-[#2463a6] text-white hover:bg-[#1d4f85] rounded-lg text-xs font-semibold shadow-xs transition flex items-center gap-1 mx-auto"
+                      >
+                        <RotateCcw size={12} />
+                        Return from Line
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* FORM AND RECENT RETURNS */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6" ref={formRef}>
+        {/* STOCK RETURN FORM */}
+        <div className="bg-white border border-[#dfe6ee] rounded-2xl p-6 shadow-xs space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-base font-bold text-[#18324d]">Stock Return Form</h3>
+            <span className="text-xs text-[#65768a]">Adds parts directly back into warehouse stock</span>
+          </div>
 
           {notice && (
             <div
-              className={`p-3 rounded-xl text-xs mb-4 ${
+              className={`p-3.5 rounded-xl text-xs flex items-start gap-2.5 ${
                 notice.type === "success"
                   ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
+                  : notice.type === "warning"
+                  ? "bg-amber-50 text-amber-800 border border-amber-200"
                   : "bg-red-50 text-red-700 border border-red-200"
               }`}
             >
-              {notice.msg}
+              {notice.type === "success" ? (
+                <CheckCircle2 size={16} className="text-emerald-600 shrink-0 mt-0.5" />
+              ) : (
+                <AlertCircle size={16} className="text-red-600 shrink-0 mt-0.5" />
+              )}
+              <div className="leading-relaxed">{notice.msg}</div>
             </div>
           )}
 
           <form onSubmit={handleReturn} className="space-y-4">
+            {/* PART SELECTION - RESTRICTED TO CONFIRMED PRODUCTION PARTS */}
             <div>
-              <label className="block text-xs font-semibold text-[#42566c] mb-1">Enter Part No *</label>
+              <div className="flex justify-between items-center mb-1">
+                <label className="block text-xs font-semibold text-[#42566c]">
+                  Select Part Confirmed in "Sent to Production" *
+                </label>
+                <span className="text-[11px] text-[#65768a]">
+                  {eligibleProductionParts.length} returnable part(s)
+                </span>
+              </div>
+
+              {/* Fast dropdown of confirmed parts in production */}
+              <select
+                value={codeQuery}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setCodeQuery(val);
+                  const matchedRec = eligibleProductionParts.find((p) => p.code === val);
+                  if (matchedRec) {
+                    setBatchNo(matchedRec.batchNo === "NO-BATCH" ? "" : matchedRec.batchNo);
+                    setSourceLine(matchedRec.line);
+                    setRef(`RET-from-${matchedRec.sampleRef}`);
+                    setQty(matchedRec.returnableQty);
+                  }
+                  setNotice(null);
+                }}
+                className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono bg-white text-[#18324d]"
+              >
+                <option value="">-- Choose confirmed production part --</option>
+                {eligibleProductionParts.map((p) => (
+                  <option key={p.key} value={p.code}>
+                    {p.code} — {p.desc} (Batch: {p.batchNo}, {p.line}, {p.returnableQty} pcs returnable)
+                  </option>
+                ))}
+              </select>
+
+              <div className="mt-1 text-[11px] text-[#65768a]">
+                Or enter Part No manually (will be validated against "Sent to Production"):
+              </div>
               <input
                 type="text"
-                list="returnItems"
+                list="confirmedProdItemsDatalist"
                 value={codeQuery}
-                onChange={(e) => setCodeQuery(e.target.value)}
+                onChange={(e) => {
+                  setCodeQuery(e.target.value.trim().toUpperCase());
+                  setNotice(null);
+                }}
                 required
-                placeholder="Enter part no..."
-                className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono"
+                placeholder="e.g. PN-1001"
+                className="w-full mt-1 px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono"
               />
-              <datalist id="returnItems">
-                {items
-                  .filter((i) => i.active)
-                  .map((i) => (
-                    <option key={i.code} value={i.code}>
-                      {i.desc}
-                    </option>
-                  ))}
+              <datalist id="confirmedProdItemsDatalist">
+                {eligibleProductionParts.map((p) => (
+                  <option key={p.key} value={p.code}>
+                    {p.desc} (Batch: {p.batchNo})
+                  </option>
+                ))}
               </datalist>
             </div>
 
+            {/* VALIDATION FEEDBACK FOR PART SELECTION */}
             {codeQuery && (
               <div>
-                {matchedItem ? (
-                  <div className="space-y-3">
-                    <div className="p-3 bg-emerald-50/50 border border-emerald-200 rounded-xl text-xs space-y-1">
-                      <div className="font-bold text-emerald-900">{matchedItem.desc}</div>
-                      <div className="text-emerald-700 font-mono">
-                        {matchedItem.code} · Total On Hand: {stock(matchedItem.code)}
-                      </div>
+                {isConfirmedInProduction && matchedItem ? (
+                  <div className="p-3 bg-emerald-50/70 border border-emerald-200 rounded-xl text-xs space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-emerald-950">{matchedItem.desc}</span>
+                      <span className="px-2 py-0.5 bg-emerald-200 text-emerald-900 rounded-md font-mono text-[10px] font-bold">
+                        VERIFIED IN PRODUCTION
+                      </span>
                     </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs font-semibold text-[#42566c] mb-1">Part Name</label>
-                        <input
-                          type="text"
-                          readOnly
-                          value={matchedItem.desc}
-                          className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm bg-gray-50 text-[#18324d] font-medium"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-semibold text-[#42566c] mb-1">Batch No / Lot No</label>
-                        <input
-                          type="text"
-                          list="returnBatchList"
-                          value={batchNo}
-                          onChange={(e) => setBatchNo(e.target.value)}
-                          placeholder="e.g. BATCH-202610-01"
-                          className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono bg-white"
-                        />
-                        <datalist id="returnBatchList">
-                          {Array.from(
-                            new Set(
-                              transactions
-                                .filter((t) => t.code === matchedItem.code && t.batchNo)
-                                .map((t) => t.batchNo as string)
-                            )
-                          ).map((b) => (
-                            <option key={b} value={b} />
-                          ))}
-                        </datalist>
-                      </div>
+                    <div className="text-emerald-800 flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
+                      <span>Code: <strong className="font-mono">{matchedItem.code}</strong></span>
+                      <span>Total In Warehouse Now: <strong>{stock(matchedItem.code)} pcs</strong></span>
+                      <span>Available on Line to Return: <strong className="text-emerald-900">{activeReturnableQty} pcs</strong></span>
                     </div>
                   </div>
                 ) : (
-                  <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs">
-                    Part not found or inactive.
+                  <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs space-y-1">
+                    <div className="flex items-center gap-1.5 font-bold">
+                      <AlertCircle size={14} className="text-red-600" />
+                      Part Not Confirmed in "Sent to Production"
+                    </div>
+                    <p className="text-[11px] text-red-700">
+                      Only parts that have already been confirmed in <strong>"Sent to Production"</strong> can return from production. This part has no active production issue record.
+                    </p>
                   </div>
                 )}
               </div>
             )}
 
+            {/* BATCH AND PRODUCTION LINE */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-semibold text-[#42566c] mb-1">Source Production Line *</label>
+                <label className="block text-xs font-semibold text-[#42566c] mb-1">
+                  Batch No / Lot No
+                </label>
+                {availableBatchesForSelectedPart.length > 0 ? (
+                  <select
+                    value={batchNo}
+                    onChange={(e) => setBatchNo(e.target.value)}
+                    className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono bg-white"
+                  >
+                    {availableBatchesForSelectedPart.map((b) => (
+                      <option key={b.key} value={b.batchNo === "NO-BATCH" ? "" : b.batchNo}>
+                        {b.batchNo} ({b.returnableQty} pcs returnable)
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={batchNo}
+                    onChange={(e) => setBatchNo(e.target.value)}
+                    placeholder="e.g. BATCH-202610-01"
+                    className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono bg-white"
+                  />
+                )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-[#42566c] mb-1">
+                  Source Production Line *
+                </label>
                 <select
                   value={sourceLine}
                   onChange={(e) => setSourceLine(e.target.value)}
@@ -3278,24 +4733,47 @@ function ReturnView({
                   <option value="Packaging Cell">Packaging Cell</option>
                 </select>
               </div>
+            </div>
+
+            {/* RETURN QUANTITY & DESTINATION LOCATION */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-semibold text-[#42566c] mb-1">Return Quantity *</label>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="block text-xs font-semibold text-[#42566c]">
+                    Return Quantity (pcs) *
+                  </label>
+                  {activeReturnableQty > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setQty(activeReturnableQty)}
+                      className="text-[10px] text-blue-600 font-bold hover:underline"
+                    >
+                      Max: {activeReturnableQty}
+                    </button>
+                  )}
+                </div>
                 <input
                   type="number"
                   min="0.001"
+                  max={activeReturnableQty || undefined}
                   step="any"
                   value={qty}
                   onChange={(e) => setQty(e.target.value === "" ? "" : Number(e.target.value))}
                   required
-                  placeholder="e.g. 5"
+                  placeholder={activeReturnableQty ? `Max: ${activeReturnableQty}` : "e.g. 5"}
                   className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono"
                 />
+                {qty !== "" && Number(qty) > activeReturnableQty && (
+                  <p className="text-[10px] text-red-600 font-semibold mt-1">
+                    Exceeds available quantity in production ({activeReturnableQty} pcs).
+                  </p>
+                )}
               </div>
-            </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-semibold text-[#42566c] mb-1">Destination Warehouse Location</label>
+                <label className="block text-xs font-semibold text-[#42566c] mb-1">
+                  Destination Warehouse Location *
+                </label>
                 <select
                   value={destLoc}
                   onChange={(e) => setDestLoc(e.target.value)}
@@ -3303,13 +4781,25 @@ function ReturnView({
                 >
                   {allLocs().map((l) => (
                     <option key={l} value={l}>
-                      {l}
+                      {l} {codeQuery && matchedItem ? `(Current: ${stock(matchedItem.code, l)} pcs)` : ""}
                     </option>
                   ))}
                 </select>
+                {matchedItem && (
+                  <p className="text-[10px] text-[#65768a] mt-1 font-mono">
+                    Stock at {destLoc}: {stock(matchedItem.code, destLoc)} pcs
+                    {qty ? ` → After return: ${stock(matchedItem.code, destLoc) + Number(qty)} pcs` : ""}
+                  </p>
+                )}
               </div>
+            </div>
+
+            {/* REFERENCE & OPERATOR */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-semibold text-[#42566c] mb-1">Production / Return Ref *</label>
+                <label className="block text-xs font-semibold text-[#42566c] mb-1">
+                  Production / Return Ref *
+                </label>
                 <input
                   type="text"
                   value={ref}
@@ -3319,32 +4809,74 @@ function ReturnView({
                   className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono"
                 />
               </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-[#42566c] mb-1">
+                  Warehouse User ID *
+                </label>
+                <input
+                  type="text"
+                  value={userId}
+                  onChange={(e) => setUserId(e.target.value)}
+                  required
+                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono"
+                />
+              </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-[#42566c] mb-1">Warehouse User ID *</label>
-              <input
-                type="text"
-                value={userId}
-                onChange={(e) => setUserId(e.target.value)}
-                required
-                className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono"
-              />
-            </div>
-
+            {/* SUBMIT BUTTON */}
             <button
               type="submit"
-              className="w-full py-3 bg-[#2463a6] text-white rounded-xl text-xs font-semibold hover:opacity-95 shadow-xs transition"
+              disabled={
+                !isConfirmedInProduction ||
+                !qty ||
+                Number(qty) <= 0 ||
+                Number(qty) > activeReturnableQty
+              }
+              className={`w-full py-3 rounded-xl text-xs font-semibold shadow-xs transition flex items-center justify-center gap-1.5 ${
+                !isConfirmedInProduction ||
+                !qty ||
+                Number(qty) <= 0 ||
+                Number(qty) > activeReturnableQty
+                  ? "bg-gray-200 text-gray-500 cursor-not-allowed border border-gray-300"
+                  : "bg-[#2463a6] text-white hover:opacity-95 cursor-pointer"
+              }`}
             >
-              ✓ Confirm & Return to Stock
+              <RotateCcw size={14} />
+              ✓ Confirm & Return to Warehouse Inventory
             </button>
+
+            {!isConfirmedInProduction && codeQuery && (
+              <p className="text-[11px] text-red-600 text-center font-medium">
+                Submit disabled: Only parts confirmed in "Sent to Production" can be returned.
+              </p>
+            )}
           </form>
         </div>
 
+        {/* RIGHT COLUMN: RECENT STOCK RETURNS */}
         <div className="space-y-6">
-          <div className="bg-white border border-[#dfe6ee] rounded-2xl p-6 shadow-xs">
-            <h3 className="text-base font-semibold text-[#18324d] mb-4">Recent Stock Returns</h3>
-            <TxTable transactions={transactions.filter((t) => t.type === "Stock Return").slice(0, 4)} />
+          <div className="bg-white border border-[#dfe6ee] rounded-2xl p-6 shadow-xs space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-[#18324d]">Recent Stock Returns</h3>
+              <span className="text-xs text-[#65768a]">
+                {transactions.filter((t) => t.type === "Stock Return").length} total records
+              </span>
+            </div>
+
+            <TxTable
+              transactions={transactions.filter((t) => t.type === "Stock Return").slice(0, 5)}
+            />
+
+            {transactions.filter((t) => t.type === "Stock Return").length > 5 && setPage && (
+              <button
+                type="button"
+                onClick={() => setPage("history")}
+                className="w-full py-2 bg-slate-50 hover:bg-slate-100 border border-[#dfe6ee] text-[#18324d] rounded-xl text-xs font-semibold transition"
+              >
+                View Full Return History in Transaction Log →
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -3379,6 +4911,7 @@ function InventoryView({
         desc: i.desc,
         min: i.min,
         model: i.model,
+        caseNo: b.caseNo || "—",
         timestamp: b.timestamp || b.updatedAt || "—",
       };
     })
@@ -3387,6 +4920,7 @@ function InventoryView({
         b.code.toLowerCase().includes(search.toLowerCase()) ||
         b.loc.toLowerCase().includes(search.toLowerCase()) ||
         b.desc.toLowerCase().includes(search.toLowerCase()) ||
+        (b.caseNo && b.caseNo.toLowerCase().includes(search.toLowerCase())) ||
         (b.batchNo && b.batchNo.toLowerCase().includes(search.toLowerCase())) ||
         (b.timestamp && b.timestamp.toLowerCase().includes(search.toLowerCase()))
     );
@@ -3396,17 +4930,18 @@ function InventoryView({
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h2 className="text-2xl font-bold text-[#18324d]">Inventory Balance</h2>
-          <p className="text-sm text-[#65768a]">Detailed stock on hand by Part No, batch, location and last updated timestamp.</p>
+          <p className="text-sm text-[#65768a]">Detailed stock on hand by Part No, Case No, batch, location and last updated timestamp.</p>
         </div>
         <button
           onClick={() =>
             downloadCSV(
               "inventory_balance.csv",
-              ["Part No", "Description", "Model", "Batch No", "Location", "Quantity", "Minimum Stock", "Timestamp / Last Updated", "Status"],
+              ["Part No", "Description", "Model", "Case No", "Batch No", "Location", "Quantity", "Minimum Stock", "Timestamp / Last Updated", "Status"],
               rows.map((r) => [
                 r.code,
                 r.desc,
                 r.model || "—",
+                r.caseNo || "—",
                 r.batchNo || "—",
                 r.loc,
                 r.qty,
@@ -3429,18 +4964,19 @@ function InventoryView({
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search part no, description, batch, location, or timestamp..."
+            placeholder="Search part no, description, case no, batch, location, or timestamp..."
             className="w-full pl-10 pr-4 py-2.5 border border-[#cfd9e4] rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#2463a6]"
           />
         </div>
 
         <div className="overflow-x-auto border border-[#dfe6ee] rounded-xl">
-          <table className="w-full text-left border-collapse min-w-[850px]">
+          <table className="w-full text-left border-collapse min-w-[900px]">
             <thead>
               <tr className="bg-[#f7f9fc] text-[#5c6f83] text-xs font-bold border-b border-[#dfe6ee]">
                 <th className="p-3">Part No</th>
                 <th className="p-3">Description</th>
                 <th className="p-3">Model</th>
+                <th className="p-3 bg-blue-50/50 text-blue-900">Case No</th>
                 <th className="p-3">Batch No</th>
                 <th className="p-3">Storage Location</th>
                 <th className="p-3">On Hand Quantity</th>
@@ -3452,7 +4988,7 @@ function InventoryView({
             <tbody className="divide-y divide-[#e9eef3] text-xs">
               {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="text-center py-8 text-[#65768a]">
+                  <td colSpan={10} className="text-center py-8 text-[#65768a]">
                     No inventory balances found.
                   </td>
                 </tr>
@@ -3465,6 +5001,15 @@ function InventoryView({
                       <td className="p-3 font-bold font-mono text-[#18324d]">{b.code}</td>
                       <td className="p-3 font-medium text-[#18324d]">{b.desc}</td>
                       <td className="p-3 text-[#65768a] text-xs">{b.model || "—"}</td>
+                      <td className="p-3 font-mono">
+                        {b.caseNo && b.caseNo !== "—" ? (
+                          <span className="inline-block px-2 py-0.5 bg-blue-50 text-blue-900 rounded font-semibold border border-blue-200 text-[11px]">
+                            {b.caseNo}
+                          </span>
+                        ) : (
+                          <span className="text-[#a0aec0] text-xs">—</span>
+                        )}
+                      </td>
                       <td className="p-3 font-mono">
                         {b.batchNo ? (
                           <span className="inline-block px-2 py-0.5 bg-blue-50 text-blue-800 rounded font-semibold border border-blue-200 text-[11px]">
@@ -3736,13 +5281,23 @@ function TxTable({
                   <div className="truncate" title={t.partName || t.desc}>{t.partName || t.desc || "—"}</div>
                 </td>
                 <td className="p-3 font-mono">
-                  {t.batchNo ? (
-                    <span className="inline-block px-2 py-0.5 bg-blue-50 text-blue-800 rounded font-semibold border border-blue-200 text-[11px]">
-                      {t.batchNo}
-                    </span>
-                  ) : (
-                    <span className="text-[#a0aec0] text-xs">—</span>
-                  )}
+                  <div className="space-y-0.5">
+                    {t.batchNo ? (
+                      <span className="inline-block px-2 py-0.5 bg-blue-50 text-blue-800 rounded font-semibold border border-blue-200 text-[11px]">
+                        {t.batchNo}
+                      </span>
+                    ) : null}
+                    {t.caseNo && t.caseNo !== "—" ? (
+                      <div>
+                        <span className="inline-block px-1.5 py-0.2 bg-purple-50 text-purple-800 rounded font-bold border border-purple-200 text-[10px]">
+                          Case: {t.caseNo}
+                        </span>
+                      </div>
+                    ) : null}
+                    {!t.batchNo && (!t.caseNo || t.caseNo === "—") && (
+                      <span className="text-[#a0aec0] text-xs">—</span>
+                    )}
+                  </div>
                 </td>
                 <td className="p-3 font-mono font-bold">
                   <span className={isIssue ? "text-amber-700" : "text-emerald-700"}>
@@ -3856,7 +5411,13 @@ Please provide a JSON response with:
             },
           });
           const text = response.text || "{}";
-          setAnalysis(JSON.parse(text));
+          let parsed;
+          try {
+            parsed = JSON.parse(text);
+          } catch {
+            parsed = {};
+          }
+          setAnalysis(parsed);
           setLoading(false);
           return;
         }
@@ -3929,7 +5490,9 @@ Please provide a JSON response with:
               <Sparkles size={18} /> Executive Stock Health & Risk Assessment
             </div>
             <p className="text-sm text-[#42566c] leading-relaxed">
-              {analysis.riskSummary || "Inventory is operating within normal parameters."}
+              {typeof analysis.riskSummary === "object"
+                ? analysis.riskSummary?.summary || JSON.stringify(analysis.riskSummary)
+                : analysis.riskSummary || "Inventory is operating within normal parameters."}
             </p>
           </div>
 
@@ -3942,13 +5505,18 @@ Please provide a JSON response with:
                 {analysis.criticalAlerts?.length === 0 ? (
                   <p className="text-xs text-[#65768a]">No critical stock alerts identified.</p>
                 ) : (
-                  analysis.criticalAlerts?.map((alert: any, idx: number) => (
-                    <div key={idx} className="p-4 bg-amber-50/50 border border-amber-200/60 rounded-xl space-y-1 text-xs">
-                      <div className="font-bold text-[#18324d] font-mono">{alert.code}</div>
-                      <div className="text-[#65768a]">Risk: {alert.reason}</div>
-                      <div className="text-amber-800 font-semibold">Action: {alert.recommendedAction}</div>
-                    </div>
-                  ))
+                  analysis.criticalAlerts?.map((alert: any, idx: number) => {
+                    const code = typeof alert === "object" ? alert.code : "";
+                    const reason = typeof alert === "object" ? (alert.reason || alert.risk || alert.issue) : String(alert);
+                    const action = typeof alert === "object" ? (alert.recommendedAction || alert.action || alert.solution) : "";
+                    return (
+                      <div key={idx} className="p-4 bg-amber-50/50 border border-amber-200/60 rounded-xl space-y-1 text-xs">
+                        <div className="font-bold text-[#18324d] font-mono">{String(code || "ALERT")}</div>
+                        <div className="text-[#65768a]">Risk: {String(reason || "N/A")}</div>
+                        {action && <div className="text-amber-800 font-semibold">Action: {String(action)}</div>}
+                      </div>
+                    );
+                  })
                 )}
               </div>
             </div>
@@ -3958,12 +5526,39 @@ Please provide a JSON response with:
                 <Package size={18} className="text-[#2463a6]" /> Supply Chain Optimization Tips
               </h3>
               <div className="space-y-3">
-                {analysis.optimizationTips?.map((tip: string, idx: number) => (
-                  <div key={idx} className="p-4 bg-[#f4f7fb] border border-[#dfe6ee] rounded-2xl text-xs space-y-1">
-                    <div className="font-bold text-[#18324d]">Tip #{idx + 1}</div>
-                    <div className="text-[#42566c] leading-relaxed">{tip}</div>
-                  </div>
-                ))}
+                {analysis.optimizationTips?.map((tip: any, idx: number) => {
+                  let tipText = "";
+                  let tipCategory: string | null = null;
+
+                  if (typeof tip === "string") {
+                    tipText = tip;
+                  } else if (typeof tip === "object" && tip !== null) {
+                    if (typeof tip.category === "string") tipCategory = tip.category;
+                    else if (typeof tip.title === "string") tipCategory = tip.title;
+
+                    if (typeof tip.tip === "string") tipText = tip.tip;
+                    else if (typeof tip.description === "string") tipText = tip.description;
+                    else if (typeof tip.text === "string") tipText = tip.text;
+                    else if (typeof tip.recommendation === "string") tipText = tip.recommendation;
+                    else tipText = JSON.stringify(tip);
+                  } else {
+                    tipText = String(tip || "");
+                  }
+
+                  return (
+                    <div key={idx} className="p-4 bg-[#f4f7fb] border border-[#dfe6ee] rounded-2xl text-xs space-y-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="font-bold text-[#18324d]">Tip #{idx + 1}</div>
+                        {tipCategory && (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-200">
+                            {tipCategory}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[#42566c] leading-relaxed">{tipText}</div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -3973,392 +5568,6 @@ Please provide a JSON response with:
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* USER & PASSWORD SETTINGS VIEW (ADMIN ONLY)                                 */
-/* -------------------------------------------------------------------------- */
-function SettingsView({
-  users,
-  setUsers,
-  canManage,
-}: {
-  users: UserAccount[];
-  setUsers: React.Dispatch<React.SetStateAction<UserAccount[]>>;
-  canManage: boolean;
-}) {
-  const [editingUserId, setEditingUserId] = useState<string | null>(null);
-  const [editUsername, setEditUsername] = useState("");
-  const [editPassword, setEditPassword] = useState("");
-  const [editName, setEditName] = useState("");
-  const [editRole, setEditRole] = useState<Role>("User");
+/* SettingsView is now imported from ./SettingsView.tsx */
 
-  const [isAdding, setIsAdding] = useState(false);
-  const [newUsername, setNewUsername] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [newName, setNewName] = useState("");
-  const [newRole, setNewRole] = useState<Role>("User");
-
-  const [showPasswordMap, setShowPasswordMap] = useState<Record<string, boolean>>({});
-  const [notice, setNotice] = useState<{ msg: string; type: "success" | "error" } | null>(null);
-
-  const togglePasswordVisibility = (id: string) => {
-    setShowPasswordMap((prev) => ({ ...prev, [id]: !prev[id] }));
-  };
-
-  const startEdit = (user: UserAccount) => {
-    setEditingUserId(user.id);
-    setEditUsername(user.username);
-    setEditPassword(user.password);
-    setEditName(user.name);
-    setEditRole(user.role);
-    setNotice(null);
-  };
-
-  const handleSaveEdit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editUsername.trim() || !editPassword.trim()) {
-      setNotice({ msg: "Username and password cannot be blank.", type: "error" });
-      return;
-    }
-    const duplicate = users.some(
-      (u) => u.id !== editingUserId && u.username.toLowerCase() === editUsername.trim().toLowerCase()
-    );
-    if (duplicate) {
-      setNotice({ msg: `Username "${editUsername.trim()}" is already in use by another account.`, type: "error" });
-      return;
-    }
-
-    setUsers(
-      users.map((u) =>
-        u.id === editingUserId
-          ? {
-              ...u,
-              username: editUsername.trim(),
-              password: editPassword.trim(),
-              name: editName.trim() || editUsername.trim(),
-              role: editRole,
-            }
-          : u
-      )
-    );
-    setEditingUserId(null);
-    setNotice({ msg: `Account "${editUsername.trim()}" updated successfully.`, type: "success" });
-  };
-
-  const handleAddUser = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newUsername.trim() || !newPassword.trim()) {
-      setNotice({ msg: "Please specify both username and password.", type: "error" });
-      return;
-    }
-    if (users.some((u) => u.username.toLowerCase() === newUsername.trim().toLowerCase())) {
-      setNotice({ msg: `Username "${newUsername.trim()}" already exists.`, type: "error" });
-      return;
-    }
-
-    const newUser: UserAccount = {
-      id: `usr_${Date.now()}`,
-      username: newUsername.trim(),
-      password: newPassword.trim(),
-      name: newName.trim() || newUsername.trim(),
-      role: newRole,
-    };
-    setUsers([...users, newUser]);
-    setIsAdding(false);
-    setNewUsername("");
-    setNewPassword("");
-    setNewName("");
-    setNewRole("User");
-    setNotice({ msg: `New user account "${newUser.username}" created successfully.`, type: "success" });
-  };
-
-  const handleDeleteUser = (id: string, username: string) => {
-    if (users.length <= 1) {
-      setNotice({ msg: "Cannot remove the only remaining user account.", type: "error" });
-      return;
-    }
-    setUsers(users.filter((u) => u.id !== id));
-    setNotice({ msg: `User "${username}" has been removed.`, type: "success" });
-  };
-
-  return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-          <h2 className="text-2xl font-bold text-[#18324d]">User Accounts & Security Settings</h2>
-          <p className="text-sm text-[#65768a]">
-            Manage login credentials, set passwords for administrators, managers, warehouse users, and add new operators.
-          </p>
-        </div>
-        {canManage && (
-          <button
-            onClick={() => {
-              setIsAdding(true);
-              setNotice(null);
-            }}
-            className="flex items-center gap-2 px-4 py-2 bg-[#2463a6] text-white rounded-xl text-xs font-semibold hover:opacity-95 shadow-xs"
-          >
-            <Plus size={14} /> Add User Account
-          </button>
-        )}
-      </div>
-
-      {notice && (
-        <div
-          className={`p-4 rounded-xl text-xs ${
-            notice.type === "success"
-              ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
-              : "bg-red-50 text-red-700 border border-red-200"
-          }`}
-        >
-          {notice.msg}
-        </div>
-      )}
-
-      {/* Add User Modal */}
-      {isAdding && (
-        <div className="fixed inset-0 bg-[#07182b]/50 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-bold text-[#18324d]">Create New User Account</h3>
-              <button onClick={() => setIsAdding(false)} className="text-[#65768a] hover:text-[#18324d]">
-                <X size={20} />
-              </button>
-            </div>
-
-            <form onSubmit={handleAddUser} className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-[#42566c] mb-1">Display Name / Operator Name *</label>
-                <input
-                  type="text"
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  placeholder="e.g. John Doe (Forklift Shift 1)"
-                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-[#42566c] mb-1">Username *</label>
-                <input
-                  type="text"
-                  value={newUsername}
-                  onChange={(e) => setNewUsername(e.target.value)}
-                  placeholder="e.g. jdoe or wh002"
-                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-[#42566c] mb-1">Password *</label>
-                <input
-                  type="text"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="e.g. Pass@1234"
-                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-[#42566c] mb-1">Assigned Role *</label>
-                <select
-                  value={newRole}
-                  onChange={(e) => setNewRole(e.target.value as Role)}
-                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm bg-white"
-                >
-                  <option value="Admin">Administrator (Full Access)</option>
-                  <option value="Manager">Warehouse Manager</option>
-                  <option value="User">Warehouse User (Floor Operator)</option>
-                </select>
-              </div>
-
-              <div className="flex justify-end gap-3 pt-3 border-t border-[#dfe6ee]">
-                <button
-                  type="button"
-                  onClick={() => setIsAdding(false)}
-                  className="px-4 py-2 border border-[#cfd9e4] rounded-xl text-xs font-semibold text-[#18324d] hover:bg-[#f7f9fc]"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 bg-[#2463a6] text-white rounded-xl text-xs font-semibold hover:opacity-95"
-                >
-                  Create User
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Edit User Modal */}
-      {editingUserId && (
-        <div className="fixed inset-0 bg-[#07182b]/50 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-bold text-[#18324d]">Edit Username & Password</h3>
-              <button onClick={() => setEditingUserId(null)} className="text-[#65768a] hover:text-[#18324d]">
-                <X size={20} />
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveEdit} className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-[#42566c] mb-1">Display Name</label>
-                <input
-                  type="text"
-                  value={editName}
-                  onChange={(e) => setEditName(e.target.value)}
-                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-[#42566c] mb-1">Username *</label>
-                <input
-                  type="text"
-                  value={editUsername}
-                  onChange={(e) => setEditUsername(e.target.value)}
-                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-[#42566c] mb-1">Password *</label>
-                <input
-                  type="text"
-                  value={editPassword}
-                  onChange={(e) => setEditPassword(e.target.value)}
-                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-[#42566c] mb-1">Role *</label>
-                <select
-                  value={editRole}
-                  onChange={(e) => setNewRole(e.target.value as Role)}
-                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm bg-white"
-                >
-                  <option value="Admin">Administrator (Full Access)</option>
-                  <option value="Manager">Warehouse Manager</option>
-                  <option value="User">Warehouse User (Floor Operator)</option>
-                </select>
-              </div>
-
-              <div className="flex justify-end gap-3 pt-3 border-t border-[#dfe6ee]">
-                <button
-                  type="button"
-                  onClick={() => setEditingUserId(null)}
-                  className="px-4 py-2 border border-[#cfd9e4] rounded-xl text-xs font-semibold text-[#18324d] hover:bg-[#f7f9fc]"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 bg-[#2463a6] text-white rounded-xl text-xs font-semibold hover:opacity-95"
-                >
-                  Save Changes
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* User Accounts Table */}
-      <div className="bg-white border border-[#dfe6ee] rounded-2xl p-6 shadow-xs space-y-4">
-        <div className="flex items-center gap-2 text-sm font-bold text-[#18324d]">
-          <ShieldCheck size={18} className="text-[#2463a6]" />
-          <span>Configured User Credentials</span>
-        </div>
-
-        <div className="overflow-x-auto border border-[#dfe6ee] rounded-xl">
-          <table className="w-full text-left border-collapse min-w-[650px]">
-            <thead>
-              <tr className="bg-[#f7f9fc] text-[#5c6f83] text-xs font-bold border-b border-[#dfe6ee]">
-                <th className="p-3">User / Name</th>
-                <th className="p-3">Username</th>
-                <th className="p-3">Password</th>
-                <th className="p-3">Assigned Role</th>
-                <th className="p-3">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[#e9eef3] text-xs">
-              {users.map((u) => {
-                const isShow = Boolean(showPasswordMap[u.id]);
-                return (
-                  <tr key={u.id} className="hover:bg-[#fcfdfd]">
-                    <td className="p-3 font-semibold text-[#18324d]">
-                      {u.name}
-                    </td>
-                    <td className="p-3 font-mono font-bold text-[#2463a6]">
-                      {u.username}
-                    </td>
-                    <td className="p-3 font-mono">
-                      <div className="flex items-center gap-2">
-                        <span className="bg-[#f4f7fb] px-2 py-1 rounded-lg border border-[#dfe6ee]">
-                          {isShow ? u.password : "••••••••••••"}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => togglePasswordVisibility(u.id)}
-                          className="text-[#65768a] hover:text-[#18324d] p-1"
-                          title={isShow ? "Hide Password" : "Show Password"}
-                        >
-                          {isShow ? <EyeOff size={14} /> : <Eye size={14} />}
-                        </button>
-                      </div>
-                    </td>
-                    <td className="p-3">
-                      <span
-                        className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                          u.role === "Admin"
-                            ? "bg-purple-50 text-purple-800 border border-purple-200"
-                            : u.role === "Manager"
-                            ? "bg-blue-50 text-blue-800 border border-blue-200"
-                            : "bg-emerald-50 text-emerald-800 border border-emerald-200"
-                        }`}
-                      >
-                        {u.role}
-                      </span>
-                    </td>
-                    <td className="p-3">
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => startEdit(u)}
-                          className="flex items-center gap-1 px-2.5 py-1 bg-white border border-[#cfd9e4] text-[#18324d] rounded-lg text-[11px] font-semibold hover:bg-[#f7f9fc]"
-                        >
-                          <Edit2 size={12} /> Edit
-                        </button>
-                        <button
-                          onClick={() => handleDeleteUser(u.id, u.username)}
-                          className="flex items-center gap-1 px-2.5 py-1 bg-red-50 text-red-700 border border-red-200 rounded-lg text-[11px] font-semibold hover:bg-red-100"
-                          title="Delete user"
-                        >
-                          <Trash2 size={12} /> Delete
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="p-4 bg-[#f4f7fb] rounded-xl text-xs text-[#65768a] leading-relaxed">
-          <strong className="text-[#18324d]">Security Notice:</strong> User credentials configured here are stored securely in local browser storage for warehouse management, access delegation, and auditing.
-        </div>
-      </div>
-    </div>
-  );
-}
 

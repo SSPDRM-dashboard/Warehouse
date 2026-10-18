@@ -12,7 +12,10 @@ import {
   Layers,
   Clock,
   User,
-  Boxes
+  Boxes,
+  Info,
+  ChevronRight,
+  Sparkles,
 } from "lucide-react";
 import { Transaction, Item, Balance } from "./types";
 
@@ -22,12 +25,57 @@ interface DailyReportsViewProps {
   balances: Balance[];
 }
 
+/**
+ * Robust date extraction helper. Normalizes any input format
+ * (YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, toLocaleString, ISO string) into YYYY-MM-DD.
+ */
+export function extractDateYMD(dateInput: string): string | null {
+  if (!dateInput) return null;
+  const str = String(dateInput).trim();
+
+  // 1. Check for YYYY-MM-DD or YYYY/MM/DD
+  const ymdMatch = str.match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (ymdMatch) {
+    const y = ymdMatch[1];
+    const m = String(Number(ymdMatch[2])).padStart(2, "0");
+    const d = String(Number(ymdMatch[3])).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+
+  // 2. Check for DD/MM/YYYY or DD-MM-YYYY (or MM/DD/YYYY)
+  const dmyMatch = str.match(/(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})/);
+  if (dmyMatch) {
+    let p1 = Number(dmyMatch[1]);
+    let p2 = Number(dmyMatch[2]);
+    const y = dmyMatch[3];
+    let d = p1;
+    let m = p2;
+    // If p2 > 12, p2 is day and p1 is month
+    if (p2 > 12 && p1 <= 12) {
+      d = p2;
+      m = p1;
+    }
+    return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  }
+
+  // 3. Fallback to native Date parser
+  const parsed = new Date(str);
+  if (!isNaN(parsed.getTime())) {
+    const y = parsed.getFullYear();
+    const m = String(parsed.getMonth() + 1).padStart(2, "0");
+    const d = String(parsed.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+
+  return null;
+}
+
 export function DailyReportsView({
   transactions,
   items,
   balances,
 }: DailyReportsViewProps) {
-  // Default to today in YYYY-MM-DD
+  // Today in YYYY-MM-DD
   const todayStr = useMemo(() => {
     const d = new Date();
     const y = d.getFullYear();
@@ -36,7 +84,43 @@ export function DailyReportsView({
     return `${y}-${m}-${day}`;
   }, []);
 
-  const [selectedDate, setSelectedDate] = useState<string>(todayStr);
+  // 1. All incoming transactions regardless of date
+  const allIncomingTx = useMemo(() => {
+    return transactions.filter((t) => {
+      const typeStr = (t.type || "").trim().toLowerCase();
+      const idStr = (t.id || "").trim().toUpperCase();
+      const sourceStr = (t.source || "").trim().toLowerCase();
+      return (
+        typeStr === "receiving" ||
+        typeStr.includes("receiv") ||
+        typeStr.includes("inbound") ||
+        idStr.startsWith("RCV") ||
+        idStr.startsWith("INB") ||
+        sourceStr.includes("supplier") ||
+        Boolean(t.containerNo)
+      );
+    });
+  }, [transactions]);
+
+  // Find all distinct dates with incoming data (newest first)
+  const availableIncomingDates = useMemo(() => {
+    const set = new Set<string>();
+    for (const t of allIncomingTx) {
+      const ymd = extractDateYMD(t.time);
+      if (ymd) set.add(ymd);
+    }
+    return Array.from(set).sort().reverse();
+  }, [allIncomingTx]);
+
+  // Default to today if today has incoming records; otherwise default to "all" so user immediately sees incoming data
+  const initialDate = useMemo(() => {
+    if (availableIncomingDates.includes(todayStr)) {
+      return todayStr;
+    }
+    return "all";
+  }, [availableIncomingDates, todayStr]);
+
+  const [selectedDate, setSelectedDate] = useState<string>("all");
   const [activeReportTab, setActiveReportTab] = useState<"all" | "incoming" | "unpacking" | "prod1">("all");
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -45,42 +129,45 @@ export function DailyReportsView({
     return item ? item.model : "—";
   };
 
-  // Check if transaction matches date
+  // Check if transaction matches the selected date
   const matchesDate = (txTime: string, dateStr: string) => {
-    if (!dateStr) return true;
-    if (txTime.includes(dateStr)) return true;
-    const parsed = new Date(txTime);
-    if (!isNaN(parsed.getTime())) {
-      const y = parsed.getFullYear();
-      const m = String(parsed.getMonth() + 1).padStart(2, "0");
-      const d = String(parsed.getDate()).padStart(2, "0");
-      return `${y}-${m}-${d}` === dateStr;
-    }
-    return false;
+    if (!dateStr || dateStr === "all") return true;
+    const ymd = extractDateYMD(txTime);
+    if (!ymd) return true; // Include if cannot parse so no data is lost
+    return ymd === dateStr;
   };
 
-  // 1. Daily Incoming Transactions
+  // Filtered Incoming Transactions for selected date
   const incomingTx = useMemo(() => {
-    return transactions.filter(
-      (t) => t.type === "Receiving" && matchesDate(t.time, selectedDate)
-    );
-  }, [transactions, selectedDate]);
+    if (selectedDate === "all") return allIncomingTx;
+    return allIncomingTx.filter((t) => matchesDate(t.time, selectedDate));
+  }, [allIncomingTx, selectedDate]);
 
-  // 2. Daily Unpacking Transactions (marked unpacked OR type === "Unpacking")
+  // Fallback to all incoming records if selected date has 0 records but data exists in system
+  const isFallbackToAll = selectedDate !== "all" && incomingTx.length === 0 && allIncomingTx.length > 0;
+  const displayedIncomingTx = useMemo(() => {
+    if (isFallbackToAll) return allIncomingTx;
+    return incomingTx;
+  }, [isFallbackToAll, allIncomingTx, incomingTx]);
+
+  // Filtered Unpacking Transactions (marked unpacked OR type === "Unpacking")
   const unpackingTx = useMemo(() => {
     return transactions.filter((t) => {
-      const isUnpack = t.type === "Unpacking" || (t.type === "Receiving" && t.unpacked !== false);
+      const isUnpack =
+        t.type === "Unpacking" ||
+        t.type?.toLowerCase().includes("unpack") ||
+        (t.type?.toLowerCase().includes("receiv") && t.unpacked !== false);
       const isDateMatch = t.unpackDate
-        ? t.unpackDate === selectedDate
+        ? (selectedDate === "all" || t.unpackDate === selectedDate)
         : matchesDate(t.time, selectedDate);
       return isUnpack && isDateMatch;
     });
   }, [transactions, selectedDate]);
 
-  // 3. Daily Sent to Production 1 Transactions
+  // Filtered Sent to Production 1 Transactions
   const prod1Tx = useMemo(() => {
     return transactions.filter((t) => {
-      const isIssue = t.type === "Production Issue";
+      const isIssue = t.type === "Production Issue" || t.type?.toLowerCase().includes("issue");
       const isLine1 =
         t.dest.toLowerCase().includes("production line 1") ||
         t.dest.toLowerCase().includes("line 1") ||
@@ -111,12 +198,14 @@ export function DailyReportsView({
 
   // Download Handlers
   const handleDownloadIncoming = () => {
+    const dataToExport = incomingTx.length > 0 ? incomingTx : allIncomingTx;
     const headers = [
       "Report Date",
       "Transaction ID",
       "Timestamp",
       "Part No",
       "Part Name",
+      "Case No",
       "Container No",
       "Batch No",
       "Model",
@@ -128,12 +217,13 @@ export function DailyReportsView({
       "Status"
     ];
 
-    const rows = incomingTx.map((t) => [
-      selectedDate,
+    const rows = dataToExport.map((t) => [
+      selectedDate === "all" || isFallbackToAll ? extractDateYMD(t.time) || t.time : selectedDate,
       t.id,
       t.time,
       t.code,
       t.partName || t.desc || "",
+      t.caseNo || "—",
       t.containerNo || "—",
       t.batchNo || "—",
       getItemModel(t.code),
@@ -145,7 +235,12 @@ export function DailyReportsView({
       t.status
     ]);
 
-    exportCSV(`daily_incoming_report_${selectedDate}.csv`, headers, rows);
+    const filename =
+      selectedDate === "all" || isFallbackToAll
+        ? `incoming_report_all_dates_${todayStr}.csv`
+        : `daily_incoming_report_${selectedDate}.csv`;
+
+    exportCSV(filename, headers, rows);
   };
 
   const handleDownloadUnpacking = () => {
@@ -166,7 +261,7 @@ export function DailyReportsView({
     ];
 
     const rows = unpackingTx.map((t) => [
-      selectedDate,
+      selectedDate === "all" ? extractDateYMD(t.time) || t.time : selectedDate,
       t.id,
       t.time,
       t.code,
@@ -181,7 +276,12 @@ export function DailyReportsView({
       "Unpacked & Verified"
     ]);
 
-    exportCSV(`daily_unpacking_report_${selectedDate}.csv`, headers, rows);
+    const filename =
+      selectedDate === "all"
+        ? `unpacking_report_all_dates_${todayStr}.csv`
+        : `daily_unpacking_report_${selectedDate}.csv`;
+
+    exportCSV(filename, headers, rows);
   };
 
   const handleDownloadProd1 = () => {
@@ -203,7 +303,7 @@ export function DailyReportsView({
     ];
 
     const rows = prod1Tx.map((t) => [
-      selectedDate,
+      selectedDate === "all" ? extractDateYMD(t.time) || t.time : selectedDate,
       t.id,
       t.time,
       t.code,
@@ -219,7 +319,12 @@ export function DailyReportsView({
       t.status
     ]);
 
-    exportCSV(`daily_sent_to_production1_${selectedDate}.csv`, headers, rows);
+    const filename =
+      selectedDate === "all"
+        ? `sent_to_production1_all_dates_${todayStr}.csv`
+        : `daily_sent_to_production1_${selectedDate}.csv`;
+
+    exportCSV(filename, headers, rows);
   };
 
   const handleDownloadAll = () => {
@@ -229,7 +334,7 @@ export function DailyReportsView({
   };
 
   // Aggregated Stats
-  const incomingTotalUnits = incomingTx.reduce((sum, t) => sum + t.qty, 0);
+  const incomingTotalUnits = displayedIncomingTx.reduce((sum, t) => sum + t.qty, 0);
   const unpackingTotalUnits = unpackingTx.reduce((sum, t) => sum + t.qty, 0);
   const prod1TotalUnits = prod1Tx.reduce((sum, t) => sum + t.qty, 0);
 
@@ -243,7 +348,9 @@ export function DailyReportsView({
         t.code.toLowerCase().includes(q) ||
         (t.partName && t.partName.toLowerCase().includes(q)) ||
         (t.desc && t.desc.toLowerCase().includes(q)) ||
+        (t.caseNo && t.caseNo.toLowerCase().includes(q)) ||
         (t.batchNo && t.batchNo.toLowerCase().includes(q)) ||
+        (t.containerNo && t.containerNo.toLowerCase().includes(q)) ||
         (t.receiverName && t.receiverName.toLowerCase().includes(q)) ||
         (t.ref && t.ref.toLowerCase().includes(q)) ||
         t.user.toLowerCase().includes(q)
@@ -260,42 +367,139 @@ export function DailyReportsView({
             <span>Daily Warehouse Reports</span>
           </h2>
           <p className="text-sm text-[#65768a]">
-            Download formal daily reports for Incoming Shipments, Daily Unpacking, and Daily Sent to Production 1.
+            Download and inspect formal reports for Incoming Container Shipments, Unpacking, and Production 1 Issues.
           </p>
         </div>
 
         {/* Date Selector & Download All */}
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* All Dates quick button */}
+          <button
+            type="button"
+            onClick={() => setSelectedDate("all")}
+            className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition cursor-pointer flex items-center gap-1.5 ${
+              selectedDate === "all"
+                ? "bg-[#10243b] text-white border-[#10243b] shadow-xs"
+                : "bg-white text-[#18324d] border-[#cfd9e4] hover:bg-gray-50"
+            }`}
+            title="Show all recorded incoming shipments across all dates"
+          >
+            <span>All Dates</span>
+            <span
+              className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                selectedDate === "all" ? "bg-white/20 text-white" : "bg-slate-100 text-[#475569]"
+              }`}
+            >
+              {allIncomingTx.length}
+            </span>
+          </button>
+
+          {/* Today quick button */}
+          <button
+            type="button"
+            onClick={() => setSelectedDate(todayStr)}
+            className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition cursor-pointer ${
+              selectedDate === todayStr
+                ? "bg-[#2463a6] text-white border-[#2463a6] shadow-xs"
+                : "bg-white text-[#18324d] border-[#cfd9e4] hover:bg-gray-50"
+            }`}
+          >
+            Today ({todayStr})
+          </button>
+
+          {/* Date Picker Input */}
           <div className="flex items-center gap-2 bg-white border border-[#cfd9e4] rounded-xl px-3 py-1.5 shadow-xs">
             <Calendar size={16} className="text-[#2463a6]" />
-            <span className="text-xs font-semibold text-[#42566c]">Date:</span>
+            <span className="text-xs font-semibold text-[#42566c]">Pick Date:</span>
             <input
               type="date"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
+              value={selectedDate === "all" ? "" : selectedDate}
+              onChange={(e) => {
+                if (e.target.value) setSelectedDate(e.target.value);
+              }}
               className="text-xs font-mono font-medium text-[#18324d] bg-transparent focus:outline-none cursor-pointer"
             />
           </div>
 
           <button
-            onClick={() => setSelectedDate(todayStr)}
-            className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition ${
-              selectedDate === todayStr
-                ? "bg-[#2463a6] text-white border-[#2463a6]"
-                : "bg-white text-[#18324d] border-[#cfd9e4] hover:bg-gray-50"
-            }`}
-          >
-            Today
-          </button>
-
-          <button
+            type="button"
             onClick={handleDownloadAll}
-            className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-[#10243b] to-[#203c5b] text-white rounded-xl text-xs font-bold shadow-xs hover:opacity-95 transition"
+            className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-[#10243b] to-[#203c5b] text-white rounded-xl text-xs font-bold shadow-xs hover:opacity-95 transition cursor-pointer"
           >
-            <Download size={14} /> Download All 3 Reports
+            <Download size={14} /> Download All Reports
           </button>
         </div>
       </div>
+
+      {/* Available Dates Fast Navigation Chips */}
+      {availableIncomingDates.length > 0 && (
+        <div className="flex items-center gap-2 flex-wrap text-xs text-[#5c6f83] bg-white border border-[#dfe6ee] rounded-xl px-4 py-2 shadow-2xs">
+          <span className="font-semibold text-[#18324d] flex items-center gap-1.5">
+            <Filter size={13} className="text-[#2463a6]" /> Available Inbound Dates:
+          </span>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {availableIncomingDates.map((date) => {
+              const count = allIncomingTx.filter((t) => extractDateYMD(t.time) === date).length;
+              const isSelected = selectedDate === date;
+              return (
+                <button
+                  key={date}
+                  type="button"
+                  onClick={() => setSelectedDate(date)}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-mono transition cursor-pointer flex items-center gap-1 ${
+                    isSelected
+                      ? "bg-[#2463a6] text-white font-bold shadow-2xs"
+                      : "bg-[#f0f4f9] hover:bg-[#e4ecf5] text-[#244266]"
+                  }`}
+                >
+                  <span>{date}</span>
+                  {date === todayStr && <span className="text-[10px] uppercase font-sans font-bold">(Today)</span>}
+                  <span
+                    className={`text-[10px] px-1 py-0.2 rounded-full ${
+                      isSelected ? "bg-white/20 text-white" : "bg-white text-[#2463a6] font-bold"
+                    }`}
+                  >
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Notice if the currently chosen date has 0 incoming shipments, with instant 1-click switch */}
+      {incomingTx.length === 0 && allIncomingTx.length > 0 && (
+        <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-amber-900 animate-in fade-in">
+          <div className="flex items-center gap-2.5">
+            <Info size={18} className="text-amber-700 shrink-0" />
+            <div>
+              <span className="font-bold">No incoming records found for date: {selectedDate}.</span>
+              <p className="text-amber-800 text-[11px] mt-0.5">
+                We found <strong>{allIncomingTx.length} incoming shipments</strong> recorded across other dates in the database.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSelectedDate("all")}
+              className="px-3 py-1.5 bg-[#10243b] text-white font-semibold rounded-lg hover:opacity-90 transition cursor-pointer"
+            >
+              View All Incoming Dates ({allIncomingTx.length})
+            </button>
+            {availableIncomingDates.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setSelectedDate(availableIncomingDates[0])}
+                className="px-3 py-1.5 bg-amber-700 text-white font-semibold rounded-lg hover:bg-amber-800 transition cursor-pointer"
+              >
+                Switch to {availableIncomingDates[0]}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* 3 Report Cards Overview */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
@@ -307,13 +511,13 @@ export function DailyReportsView({
                 <ArrowDownLeft size={22} />
               </div>
               <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                Inbound
+                Inbound Receiving
               </span>
             </div>
             <div>
               <h3 className="font-bold text-base text-[#18324d]">Daily Incoming Report</h3>
               <p className="text-xs text-[#65768a] mt-0.5">
-                Inbound receipts from suppliers with Receiver Name, DO numbers & destination bins.
+                Inbound receipts from suppliers with Container No, Batch No, DO numbers & destination bins.
               </p>
             </div>
             <div className="pt-2 border-t border-[#f0f4f8] grid grid-cols-2 gap-2 text-xs">
@@ -330,7 +534,7 @@ export function DailyReportsView({
           <button
             onClick={handleDownloadIncoming}
             disabled={incomingTx.length === 0}
-            className="mt-4 w-full py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-40 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition shadow-xs"
+            className="mt-4 w-full py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-40 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition shadow-xs cursor-pointer"
           >
             <Download size={14} /> Download Incoming Report (.csv)
           </button>
@@ -367,7 +571,7 @@ export function DailyReportsView({
           <button
             onClick={handleDownloadUnpacking}
             disabled={unpackingTx.length === 0}
-            className="mt-4 w-full py-2.5 bg-[#2463a6] hover:bg-[#1d528a] disabled:opacity-40 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition shadow-xs"
+            className="mt-4 w-full py-2.5 bg-[#2463a6] hover:bg-[#1d528a] disabled:opacity-40 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition shadow-xs cursor-pointer"
           >
             <Download size={14} /> Download Unpacking Report (.csv)
           </button>
@@ -404,7 +608,7 @@ export function DailyReportsView({
           <button
             onClick={handleDownloadProd1}
             disabled={prod1Tx.length === 0}
-            className="mt-4 w-full py-2.5 bg-amber-700 hover:bg-amber-800 disabled:opacity-40 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition shadow-xs"
+            className="mt-4 w-full py-2.5 bg-amber-700 hover:bg-amber-800 disabled:opacity-40 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition shadow-xs cursor-pointer"
           >
             <Download size={14} /> Download Production 1 Report (.csv)
           </button>
@@ -415,8 +619,17 @@ export function DailyReportsView({
       <div className="bg-white border border-[#dfe6ee] rounded-2xl p-6 shadow-xs space-y-4">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
-            <h3 className="text-base font-bold text-[#18324d]">Daily Data Table Preview ({selectedDate})</h3>
-            <p className="text-xs text-[#65768a]">Inspect records matching the selected date prior to export</p>
+            <div className="flex items-center gap-2">
+              <h3 className="text-base font-bold text-[#18324d]">
+                Data Table Preview ({selectedDate === "all" ? "All Recorded Dates" : selectedDate})
+              </h3>
+              <span className="text-xs font-mono bg-blue-50 text-blue-800 px-2 py-0.5 rounded-full border border-blue-200 font-semibold">
+                {incomingTx.length} Incoming Records
+              </span>
+            </div>
+            <p className="text-xs text-[#65768a] mt-0.5">
+              Inspect records matching the selected date prior to export or click headers to view.
+            </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -424,42 +637,46 @@ export function DailyReportsView({
               <Search className="absolute left-3 top-2.5 text-[#65768a]" size={14} />
               <input
                 type="text"
-                placeholder="Search part, name, DO..."
+                placeholder="Search part, container, DO..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-8 pr-3 py-1.5 border border-[#cfd9e4] rounded-xl text-xs bg-white w-48 focus:outline-none focus:ring-2 focus:ring-[#2463a6]"
+                className="pl-8 pr-3 py-1.5 border border-[#cfd9e4] rounded-xl text-xs bg-white w-52 focus:outline-none focus:ring-2 focus:ring-[#2463a6]"
               />
             </div>
 
             <div className="flex bg-[#f3f6fa] p-1 rounded-xl gap-1 text-xs font-semibold">
               <button
+                type="button"
                 onClick={() => setActiveReportTab("all")}
-                className={`px-3 py-1 rounded-lg transition ${
+                className={`px-3 py-1 rounded-lg transition cursor-pointer ${
                   activeReportTab === "all" ? "bg-white text-[#18324d] shadow-xs" : "text-[#65768a] hover:text-[#18324d]"
                 }`}
               >
                 All 3 Reports
               </button>
               <button
+                type="button"
                 onClick={() => setActiveReportTab("incoming")}
-                className={`px-3 py-1 rounded-lg transition ${
-                  activeReportTab === "incoming" ? "bg-white text-emerald-800 shadow-xs" : "text-[#65768a] hover:text-[#18324d]"
+                className={`px-3 py-1 rounded-lg transition cursor-pointer ${
+                  activeReportTab === "incoming" ? "bg-white text-emerald-800 shadow-xs font-bold" : "text-[#65768a] hover:text-[#18324d]"
                 }`}
               >
-                Incoming ({incomingTx.length})
+                Incoming ({displayedIncomingTx.length})
               </button>
               <button
+                type="button"
                 onClick={() => setActiveReportTab("unpacking")}
-                className={`px-3 py-1 rounded-lg transition ${
-                  activeReportTab === "unpacking" ? "bg-white text-blue-800 shadow-xs" : "text-[#65768a] hover:text-[#18324d]"
+                className={`px-3 py-1 rounded-lg transition cursor-pointer ${
+                  activeReportTab === "unpacking" ? "bg-white text-blue-800 shadow-xs font-bold" : "text-[#65768a] hover:text-[#18324d]"
                 }`}
               >
                 Unpacking ({unpackingTx.length})
               </button>
               <button
+                type="button"
                 onClick={() => setActiveReportTab("prod1")}
-                className={`px-3 py-1 rounded-lg transition ${
-                  activeReportTab === "prod1" ? "bg-white text-amber-800 shadow-xs" : "text-[#65768a] hover:text-[#18324d]"
+                className={`px-3 py-1 rounded-lg transition cursor-pointer ${
+                  activeReportTab === "prod1" ? "bg-white text-amber-800 shadow-xs font-bold" : "text-[#65768a] hover:text-[#18324d]"
                 }`}
               >
                 Sent to Prod 1 ({prod1Tx.length})
@@ -473,25 +690,44 @@ export function DailyReportsView({
           <div className="space-y-2 pt-2">
             <div className="flex items-center justify-between">
               <h4 className="text-xs font-bold uppercase tracking-wider text-emerald-800 flex items-center gap-1.5">
-                <ArrowDownLeft size={14} /> 1. Daily Incoming Shipments ({incomingTx.length} records)
+                <ArrowDownLeft size={14} /> 1. Daily Incoming Shipments ({displayedIncomingTx.length} records)
               </h4>
               <button
                 onClick={handleDownloadIncoming}
-                disabled={incomingTx.length === 0}
-                className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-900 disabled:opacity-40 flex items-center gap-1"
+                disabled={displayedIncomingTx.length === 0}
+                className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-900 disabled:opacity-40 flex items-center gap-1 cursor-pointer"
               >
                 <Download size={12} /> Export Incoming CSV
               </button>
             </div>
 
+            {isFallbackToAll && (
+              <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-900 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Info size={16} className="text-blue-700 shrink-0" />
+                  <span>
+                    No incoming records found specifically for <strong>{selectedDate}</strong>. Showing all <strong>{allIncomingTx.length}</strong> recorded incoming shipments across all dates below.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedDate("all")}
+                  className="px-2.5 py-1 bg-blue-700 text-white rounded-lg text-[11px] font-semibold hover:bg-blue-800 transition shrink-0 cursor-pointer"
+                >
+                  Set to All Dates
+                </button>
+              </div>
+            )}
+
             <div className="overflow-x-auto border border-[#dfe6ee] rounded-xl">
-              <table className="w-full text-left border-collapse min-w-[950px]">
+              <table className="w-full text-left border-collapse min-w-[1000px]">
                 <thead>
                   <tr className="bg-[#f7f9fc] text-[#5c6f83] text-xs font-bold border-b border-[#dfe6ee]">
                     <th className="p-3">Tx ID</th>
                     <th className="p-3">Time</th>
                     <th className="p-3">Part No</th>
                     <th className="p-3">Part Name</th>
+                    <th className="p-3 bg-blue-50/70 text-blue-900 font-bold">Case No</th>
                     <th className="p-3">Container No</th>
                     <th className="p-3">Batch No</th>
                     <th className="p-3">Qty Received</th>
@@ -503,20 +739,45 @@ export function DailyReportsView({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#e9eef3] text-xs">
-                  {applySearch(incomingTx).length === 0 ? (
+                  {applySearch(displayedIncomingTx).length === 0 ? (
                     <tr>
-                      <td colSpan={12} className="text-center py-6 text-[#65768a]">
-                        No incoming receipts recorded for {selectedDate}.
+                      <td colSpan={13} className="text-center py-8 text-[#65768a]">
+                        <div className="max-w-md mx-auto space-y-2">
+                          <p className="font-semibold text-sm text-[#18324d]">
+                            No incoming receipts recorded for {selectedDate === "all" ? "the system" : selectedDate}.
+                          </p>
+                          {allIncomingTx.length > 0 && selectedDate !== "all" && (
+                            <p className="text-xs text-[#65768a]">
+                              {allIncomingTx.length} incoming records are available on other dates.{" "}
+                              <button
+                                type="button"
+                                onClick={() => setSelectedDate("all")}
+                                className="text-[#2463a6] font-bold hover:underline cursor-pointer"
+                              >
+                                Click here to show all incoming records
+                              </button>
+                            </p>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ) : (
-                    applySearch(incomingTx).map((t) => (
+                    applySearch(displayedIncomingTx).map((t) => (
                       <tr key={t.id} className="hover:bg-[#fcfdfd]">
                         <td className="p-3 font-mono font-bold text-[#18324d]">{t.id}</td>
                         <td className="p-3 font-mono text-[#65768a] text-[11px]">{t.time}</td>
                         <td className="p-3 font-mono font-bold text-[#18324d]">{t.code}</td>
                         <td className="p-3 font-medium text-[#18324d] max-w-[180px] truncate" title={t.partName || t.desc}>
                           {t.partName || t.desc || "—"}
+                        </td>
+                        <td className="p-3 font-mono">
+                          {t.caseNo && t.caseNo !== "—" ? (
+                            <span className="inline-block px-2 py-0.5 bg-blue-50 text-blue-900 rounded font-semibold border border-blue-200 text-[11px]">
+                              {t.caseNo}
+                            </span>
+                          ) : (
+                            <span className="text-[#a0aec0] text-xs">—</span>
+                          )}
                         </td>
                         <td className="p-3 font-mono font-semibold text-[#18324d]">
                           {t.containerNo ? (
@@ -569,7 +830,7 @@ export function DailyReportsView({
               <button
                 onClick={handleDownloadUnpacking}
                 disabled={unpackingTx.length === 0}
-                className="text-[11px] font-semibold text-blue-700 hover:text-blue-900 disabled:opacity-40 flex items-center gap-1"
+                className="text-[11px] font-semibold text-blue-700 hover:text-blue-900 disabled:opacity-40 flex items-center gap-1 cursor-pointer"
               >
                 <Download size={12} /> Export Unpacking CSV
               </button>
@@ -596,7 +857,7 @@ export function DailyReportsView({
                   {applySearch(unpackingTx).length === 0 ? (
                     <tr>
                       <td colSpan={11} className="text-center py-6 text-[#65768a]">
-                        No unpacking records recorded for {selectedDate}.
+                        No unpacking records recorded for {selectedDate === "all" ? "the system" : selectedDate}.
                       </td>
                     </tr>
                   ) : (
@@ -650,7 +911,7 @@ export function DailyReportsView({
               <button
                 onClick={handleDownloadProd1}
                 disabled={prod1Tx.length === 0}
-                className="text-[11px] font-semibold text-amber-700 hover:text-amber-900 disabled:opacity-40 flex items-center gap-1"
+                className="text-[11px] font-semibold text-amber-700 hover:text-amber-900 disabled:opacity-40 flex items-center gap-1 cursor-pointer"
               >
                 <Download size={12} /> Export Production 1 CSV
               </button>
@@ -677,7 +938,7 @@ export function DailyReportsView({
                   {applySearch(prod1Tx).length === 0 ? (
                     <tr>
                       <td colSpan={11} className="text-center py-6 text-[#65768a]">
-                        No parts issued to Production Line 1 for {selectedDate}.
+                        No parts issued to Production Line 1 for {selectedDate === "all" ? "the system" : selectedDate}.
                       </td>
                     </tr>
                   ) : (

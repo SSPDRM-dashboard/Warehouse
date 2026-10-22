@@ -16,7 +16,12 @@ export const seedItems: Item[] = [
   { model: "Line-A Assembly", code: "PN-1003", desc: "Steel Component Tray", min: 30, active: true },
   { model: "Civic FC 1.5T", code: "PN-1004", desc: "Protective Cover", min: 25, active: false },
   { model: "CR-V Gen 5", code: "PN-1005", desc: "Precision Bearing Assembly", min: 15, active: true },
-  { model: "Workshop General", code: "PN-1006", desc: "Hydraulic Fluid (20L)", min: 40, active: true }
+  { model: "Workshop General", code: "PN-1006", desc: "Hydraulic Fluid (20L)", min: 40, active: true },
+  // Finished Goods Modules for Vehicle Assembly (VA)
+  { model: "Civic FD", code: "FG-IP-101", desc: "IP (Instrument Panel) Cockpit Module Assembly", min: 15, active: true },
+  { model: "Civic FD", code: "FG-CC-201", desc: "Center Console Floor Module Assembly", min: 15, active: true },
+  { model: "Civic FD", code: "FG-DT-301", desc: "Door Trim Lining Assembly Set (FR/RR)", min: 20, active: true },
+  { model: "Civic FD", code: "FG-CM-401", desc: "Cooling Module & Front End Radiator Pack", min: 10, active: true },
 ];
 
 export const initialBalances: Balance[] = [
@@ -24,7 +29,12 @@ export const initialBalances: Balance[] = [
   { code: "PN-1002", loc: "B-02-01", qty: 186, timestamp: `${curToday} 09:15:00`, batchNo: "BATCH-202610-16A", caseNo: "CASE-02" },
   { code: "PN-1003", loc: "C-01-02", qty: 150, timestamp: `${curToday} 10:40:00`, batchNo: "BATCH-202610-16B", caseNo: "CASE-03" },
   { code: "PN-1005", loc: "A-03-01", qty: 12, timestamp: "2026-10-14 11:20:00", batchNo: "BATCH-202610-01", caseNo: "CASE-04" },
-  { code: "PN-1006", loc: "D-01-01", qty: 120, timestamp: "2026-10-14 13:45:00", batchNo: "LOT-2026-09B", caseNo: "CASE-05" }
+  { code: "PN-1006", loc: "D-01-01", qty: 120, timestamp: "2026-10-14 13:45:00", batchNo: "LOT-2026-09B", caseNo: "CASE-05" },
+  // Finished Goods Staging Balances
+  { code: "FG-IP-101", loc: "FG-BUFFER-01", qty: 28, timestamp: `${curToday} 08:00:00`, batchNo: "LOT-IP-202610-A", caseNo: "TROLLEY-01" },
+  { code: "FG-CC-201", loc: "FG-BUFFER-02", qty: 34, timestamp: `${curToday} 08:00:00`, batchNo: "LOT-CC-202610-A", caseNo: "TROLLEY-02" },
+  { code: "FG-DT-301", loc: "FG-BUFFER-03", qty: 42, timestamp: `${curToday} 08:00:00`, batchNo: "LOT-DT-202610-A", caseNo: "TROLLEY-03" },
+  { code: "FG-CM-401", loc: "FG-BUFFER-04", qty: 18, timestamp: `${curToday} 08:00:00`, batchNo: "LOT-CM-202610-A", caseNo: "TROLLEY-04" },
 ];
 
 export const initialTransactions: Transaction[] = [
@@ -176,5 +186,90 @@ export const initialTransactions: Transaction[] = [
     receiverName: "Line 1 Leader",
     time: "2026-10-13 10:15:00",
     status: "Posted"
+  },
+  // Initial Dispatches Sent to VA (Vehicle Assembly)
+  {
+    id: `VA-DISP-${curToday.replace(/-/g, "")}-001`,
+    type: "Send to VA",
+    code: "FG-IP-101",
+    partName: "IP (Instrument Panel)",
+    desc: "IP (Instrument Panel) Cockpit Module Assembly",
+    finishedGoodModule: "IP",
+    model: "Civic FD",
+    batchNo: "LOT-IP-202610-A",
+    caseNo: "TROLLEY-01",
+    trolleyNo: "TROLLEY-01",
+    qty: 12,
+    source: "FG-BUFFER-01",
+    dest: "VA Main Line 1 - Cockpit Decking",
+    ref: `VA-DO-${curToday.replace(/-/g, "")}-01`,
+    user: "admin",
+    receiverName: "Azman (VA Line 1 Leader)",
+    time: `${curToday} 09:30:00`,
+    status: "Posted",
+    notes: "Passed Final Inspection OK, delivered via AGV-01"
+  },
+  {
+    id: `VA-DISP-${curToday.replace(/-/g, "")}-002`,
+    type: "Send to VA",
+    code: "FG-CC-201",
+    partName: "Center Console",
+    desc: "Center Console Floor Module Assembly",
+    finishedGoodModule: "Center Console",
+    model: "Civic FD",
+    batchNo: "LOT-CC-202610-A",
+    caseNo: "TROLLEY-02",
+    trolleyNo: "TROLLEY-02",
+    qty: 12,
+    source: "FG-BUFFER-02",
+    dest: "VA Main Line 1 - Interior Trim",
+    ref: `VA-DO-${curToday.replace(/-/g, "")}-02`,
+    user: "admin",
+    receiverName: "Roslan (VA Trim Leader)",
+    time: `${curToday} 10:15:00`,
+    status: "Posted",
+    notes: "Wiring harness tested OK"
+  },
+  {
+    id: `VA-DISP-${curToday.replace(/-/g, "")}-003`,
+    type: "Send to VA",
+    code: "FG-DT-301",
+    partName: "Door Trim",
+    desc: "Door Trim Lining Assembly Set (FR/RR)",
+    finishedGoodModule: "Door Trim",
+    model: "Civic FD",
+    batchNo: "LOT-DT-202610-A",
+    caseNo: "TROLLEY-03",
+    trolleyNo: "TROLLEY-03",
+    qty: 16,
+    source: "FG-BUFFER-03",
+    dest: "VA Door Sub-Line",
+    ref: `VA-DO-${curToday.replace(/-/g, "")}-03`,
+    user: "kitting",
+    receiverName: "Hafiz (VA Door Station)",
+    time: `${curToday} 11:00:00`,
+    status: "Posted",
+    notes: "Complete 4-door trim sets with master switch"
+  },
+  {
+    id: `VA-DISP-${curToday.replace(/-/g, "")}-004`,
+    type: "Send to VA",
+    code: "FG-CM-401",
+    partName: "Cooling Module",
+    desc: "Cooling Module & Front End Radiator Pack",
+    finishedGoodModule: "Cooling Module",
+    model: "Civic FD",
+    batchNo: "LOT-CM-202610-A",
+    caseNo: "TROLLEY-04",
+    trolleyNo: "TROLLEY-04",
+    qty: 8,
+    source: "FG-BUFFER-04",
+    dest: "VA Front Decking Station",
+    ref: `VA-DO-${curToday.replace(/-/g, "")}-04`,
+    user: "forklift",
+    receiverName: "Tan (VA Chassis Leader)",
+    time: `${curToday} 13:20:00`,
+    status: "Posted",
+    notes: "Leak test passed 100%"
   }
 ];

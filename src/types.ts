@@ -15,6 +15,7 @@ export type Page =
   | "kitting_case"
   | "issue"
   | "return"
+  | "send_to_va"
   | "inventory"
   | "history"
   | "reports"
@@ -36,6 +37,7 @@ export const AVAILABLE_PANELS: PanelConfig[] = [
   { id: "unpack", label: "Kitting-Unpack", description: "In-transit forklift tracking, kitting batch staging and inspection", category: "Operations" },
   { id: "issue", label: "Send to Production", description: "Issuing parts to production lines, work orders and tracking", category: "Operations" },
   { id: "return", label: "Return from Production", description: "Returning excess or rejected materials back into inventory", category: "Operations" },
+  { id: "send_to_va", label: "Send to VA", description: "Dispatch Finished Goods (IP, Center Console, Door Trim, Cooling Module) to Vehicle Assembly line", category: "Operations" },
   { id: "inventory", label: "Inventory Balance", description: "Stock on hand by part no, location, container and lot timestamp", category: "Inventory" },
   { id: "history", label: "Transaction History", description: "Comprehensive audit trail and material movement logs", category: "Inventory" },
   { id: "reports", label: "Daily Warehouse Reports", description: "Daily incoming container reports, unpack logs and production 1 sheet", category: "Reports & System" },
@@ -54,6 +56,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissions = {
     "kitting_case",
     "issue",
     "return",
+    "send_to_va",
     "inventory",
     "history",
     "reports",
@@ -65,6 +68,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissions = {
     "receiving",
     "unpack",
     "kitting_case",
+    "send_to_va",
     "inventory",
     "reports",
   ],
@@ -75,6 +79,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissions = {
     "unpack",
     "kitting_case",
     "return",
+    "send_to_va",
     "history",
   ],
   Forklift: [
@@ -83,6 +88,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissions = {
     "kitting_case",
     "receiving",
     "issue",
+    "send_to_va",
     "inventory",
   ],
   Kitting: [
@@ -91,6 +97,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissions = {
     "kitting_case",
     "issue",
     "return",
+    "send_to_va",
     "inventory",
     "reports",
   ],
@@ -102,6 +109,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissions = {
     "kitting_case",
     "issue",
     "return",
+    "send_to_va",
     "inventory",
     "history",
     "reports",
@@ -113,6 +121,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissions = {
     "receiving",
     "unpack",
     "kitting_case",
+    "send_to_va",
     "inventory",
   ],
 };
@@ -156,7 +165,8 @@ export type Transaction = {
     | "Unpacking" 
     | "Forklift Transfer"
     | "Unpack Log"
-    | "Sent to Operation";
+    | "Sent to Operation"
+    | "Send to VA";
   code: string; // Part No
   partName?: string; // Part Name
   desc?: string; // Description
@@ -175,6 +185,10 @@ export type Transaction = {
   time: string;
   status: "Posted" | "Pending" | "Cancelled";
   confirmedFromKittingCase?: boolean;
+  finishedGoodModule?: "IP" | "Center Console" | "Door Trim" | "Cooling Module" | string;
+  trolleyNo?: string;
+  model?: string;
+  notes?: string;
 }
 
 export type UnpackStage =

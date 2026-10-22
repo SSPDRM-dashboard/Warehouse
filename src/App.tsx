@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
+import * as XLSX from "xlsx";
 import { GoogleGenAI } from "@google/genai";
 import {
   LayoutDashboard,
@@ -59,6 +60,7 @@ import { DailyReportsView } from "./DailyReportsView";
 import { subscribeToWarehouseState, pushWarehouseStateToCloud } from "./warehouseStore";
 import { LoginView } from "./LoginView";
 import { SettingsView } from "./SettingsView";
+import { SendToVAView } from "./SendToVAView";
 
 
 // Module-level helpers
@@ -135,6 +137,15 @@ const downloadCSV = (name: string, headers: string[], rows: any[][]) => {
   a.download = name;
   a.click();
   URL.revokeObjectURL(a.href);
+};
+
+const downloadXLSX = (name: string, headers: string[], rows: any[][], sheetName = "Item Master") => {
+  const data = [headers, ...rows];
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  const fileName = name.endsWith(".xlsx") ? name : `${name}.xlsx`;
+  XLSX.writeFile(wb, fileName);
 };
 
 export default function App() {
@@ -451,6 +462,14 @@ export default function App() {
               label="Return from Production"
             />
           )}
+          {isPanelAllowed("send_to_va") && (
+            <SidebarButton
+              active={page === "send_to_va"}
+              onClick={() => setPage("send_to_va")}
+              icon={<Truck size={18} />}
+              label="Send to VA"
+            />
+          )}
           {isPanelAllowed("inventory") && (
             <SidebarButton
               active={page === "inventory"}
@@ -521,6 +540,8 @@ export default function App() {
               {page === "unpack" && "Kitting-Unpack Station"}
               {page === "kitting_case" && "Kitting Case & Batch Transfer Station"}
               {page === "issue" && "Send Parts to Production"}
+              {page === "return" && "Return Parts from Production"}
+              {page === "send_to_va" && "Send to VA (Vehicle Assembly) - Finished Goods"}
               {page === "inventory" && "Warehouse Inventory Balance"}
               {page === "history" && "Transaction History & Audit Log"}
               {page === "reports" && "Daily Warehouse Reports (Incoming, Unpacking & Production 1)"}
@@ -713,8 +734,31 @@ export default function App() {
                   setPage={setPage}
                 />
               </div>
+              <div className={page === "send_to_va" ? "block space-y-6" : "hidden"}>
+                <SendToVAView
+                  items={items}
+                  balances={balances}
+                  setBalances={setBalances}
+                  transactions={transactions}
+                  setTransactions={setTransactions}
+                  currentUser={currentUser}
+                  users={users}
+                  role={role}
+                  setPage={setPage}
+                />
+              </div>
               <div className={page === "inventory" ? "block space-y-6" : "hidden"}>
-                <InventoryView balances={balances} items={items} stock={stock} />
+                <InventoryView
+                  balances={balances}
+                  setBalances={setBalances}
+                  items={items}
+                  stock={stock}
+                  transactions={transactions}
+                  setTransactions={setTransactions}
+                  currentUser={currentUser}
+                  users={users}
+                  role={role}
+                />
               </div>
               <div className={page === "history" ? "block space-y-6" : "hidden"}>
                 <HistoryView
@@ -893,24 +937,30 @@ function DashboardView({
         <p className="text-xs text-[#b8c9da]">
           Tap below to quickly receive stock, issue to production, or return materials from your mobile device.
         </p>
-        <div className="grid grid-cols-3 gap-2 pt-1">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
           <button
             onClick={() => setPage("receiving")}
-            className="py-2.5 px-3 bg-white/10 hover:bg-white/20 rounded-xl text-xs font-semibold text-center transition"
+            className="py-2.5 px-3 bg-white/10 hover:bg-white/20 rounded-xl text-xs font-semibold text-center transition cursor-pointer"
           >
             + Receive
           </button>
           <button
             onClick={() => setPage("issue")}
-            className="py-2.5 px-3 bg-white/10 hover:bg-white/20 rounded-xl text-xs font-semibold text-center transition"
+            className="py-2.5 px-3 bg-white/10 hover:bg-white/20 rounded-xl text-xs font-semibold text-center transition cursor-pointer"
           >
             - Issue Prod
           </button>
           <button
             onClick={() => setPage("return")}
-            className="py-2.5 px-3 bg-white/10 hover:bg-white/20 rounded-xl text-xs font-semibold text-center transition"
+            className="py-2.5 px-3 bg-white/10 hover:bg-white/20 rounded-xl text-xs font-semibold text-center transition cursor-pointer"
           >
-            ↺ Return
+            ↺ Return Prod
+          </button>
+          <button
+            onClick={() => setPage("send_to_va")}
+            className="py-2.5 px-3 bg-emerald-500/30 hover:bg-emerald-500/40 border border-emerald-400/40 rounded-xl text-xs font-bold text-center transition cursor-pointer flex items-center justify-center gap-1"
+          >
+            <Truck size={14} /> Send to VA
           </button>
         </div>
       </div>
@@ -992,6 +1042,21 @@ function DashboardView({
               <div>
                 <div>Item Master</div>
                 <div className="text-xs font-normal text-[#65768a]">Manage part nos & specs</div>
+              </div>
+            </button>
+            <button
+              onClick={() => setPage("send_to_va")}
+              className="flex items-center gap-3 p-4 bg-blue-50/60 hover:bg-blue-100/60 border border-blue-200 rounded-xl text-left font-semibold text-sm text-[#18324d] transition sm:col-span-2 cursor-pointer"
+            >
+              <Truck className="text-blue-700 shrink-0" size={20} />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between">
+                  <div className="font-bold text-[#18324d]">Send Finished Goods to VA</div>
+                  <span className="text-[10px] bg-blue-100 text-blue-800 font-bold px-2 py-0.5 rounded-full">IP • Console • Door • Cooling</span>
+                </div>
+                <div className="text-xs font-normal text-[#65768a] truncate">
+                  Record and dispatch Finished Goods modules to Vehicle Assembly line
+                </div>
               </div>
             </button>
             <button
@@ -1100,11 +1165,27 @@ function ItemsView({
   const [deleteCode, setDeleteCode] = useState<string | null>(null);
   const [deleteNotice, setDeleteNotice] = useState<string | null>(null);
 
+  // Duplicate Part No Resolution on Import (XLSX or CSV)
+  interface DuplicateRecord {
+    code: string;
+    existing: Item;
+    incoming: Item;
+  }
+
+  interface DuplicateModalData {
+    sourceType: "Excel (.xlsx)" | "CSV";
+    brandNew: Item[];
+    duplicates: DuplicateRecord[];
+    resolutions: Record<string, "keep" | "replace" | "delete">;
+  }
+
+  const [duplicateModalData, setDuplicateModalData] = useState<DuplicateModalData | null>(null);
+
   const confirmDelete = () => {
     if (!deleteCode) return;
     const targetCode = deleteCode.trim().toUpperCase();
     setItems((prev) => prev.filter((i) => i.code.trim().toUpperCase() !== targetCode));
-    // CRITICAL (Request 3): Do not change or wipe inventory that is already keyed in
+    // CRITICAL: Do not change or wipe inventory that is already keyed in
     setDeleteNotice(`Part ${targetCode} successfully deleted from Item Master.`);
     setDeleteCode(null);
     setTimeout(() => setDeleteNotice(null), 4000);
@@ -1113,12 +1194,146 @@ function ItemsView({
   const filtered = items.filter(
     (i) =>
       i.code.toLowerCase().includes(search.toLowerCase()) ||
-      i.desc.toLowerCase().includes(search.toLowerCase())
+      i.desc.toLowerCase().includes(search.toLowerCase()) ||
+      (i.model && i.model.toLowerCase().includes(search.toLowerCase()))
   );
 
   const toggleStatus = (code: string) => {
     if (!canManage) return;
     setItems(items.map((i) => (i.code === code ? { ...i, active: !i.active } : i)));
+  };
+
+  // Helper to parse 2D array of rows from CSV or XLSX into Item array
+  const parseRowsToItems = (rawRows: any[][]): Item[] => {
+    if (!rawRows || rawRows.length === 0) {
+      throw new Error("File contains no data rows.");
+    }
+
+    const firstNonEmptyIdx = rawRows.findIndex(
+      (row) => Array.isArray(row) && row.some((c) => String(c ?? "").trim().length > 0)
+    );
+    if (firstNonEmptyIdx === -1) {
+      throw new Error("File contains only blank rows.");
+    }
+
+    const rawHeaderStrings = rawRows[firstNonEmptyIdx].map((c) =>
+      String(c ?? "").toLowerCase().trim()
+    );
+
+    const headerKeywords = [
+      "part", "code", "sku", "item", "desc", "description", "name", "model", "series", "min", "minimum", "stock"
+    ];
+    const hasHeaders = rawHeaderStrings.some((h) =>
+      headerKeywords.some((k) => h.includes(k))
+    );
+
+    const dataRows = hasHeaders ? rawRows.slice(firstNonEmptyIdx + 1) : rawRows.slice(firstNonEmptyIdx);
+    let modelIdx = -1;
+    let codeIdx = -1;
+    let descIdx = -1;
+    let minIdx = -1;
+
+    if (hasHeaders) {
+      const findCol = (keywords: string[]) => {
+        for (const kw of keywords) {
+          const found = rawHeaderStrings.findIndex((h) => h.includes(kw));
+          if (found >= 0) return found;
+        }
+        return -1;
+      };
+
+      codeIdx = findCol(["part no", "partno", "part_no", "part #", "part code", "partcode", "part", "code", "sku", "item no", "item code"]);
+      descIdx = findCol(["desc", "name", "description", "title", "part name", "specification"]);
+      modelIdx = findCol(["model", "series", "car", "category", "line"]);
+      minIdx = findCol(["min", "minimum", "safety", "threshold", "reorder", "stock"]);
+    }
+
+    if (codeIdx === -1) codeIdx = hasHeaders ? (modelIdx === 0 ? 1 : 0) : 1;
+    if (descIdx === -1) descIdx = codeIdx === 1 ? 2 : 1;
+    if (modelIdx === -1) modelIdx = codeIdx === 1 ? 0 : -1;
+    if (minIdx === -1) minIdx = 3;
+
+    const parsedItems: Item[] = [];
+
+    for (const row of dataRows) {
+      if (!Array.isArray(row) || !row.some((c) => String(c ?? "").trim().length > 0)) {
+        continue;
+      }
+
+      let code = String(row[codeIdx] ?? "").trim();
+      if (!code && row[0]) {
+        code = String(row[0]).trim();
+      }
+      if (!code) continue;
+
+      let desc = String(row[descIdx] ?? "").trim();
+      if (!desc) {
+        desc = code;
+      }
+
+      let model = modelIdx >= 0 ? String(row[modelIdx] ?? "").trim() : "";
+      let minRaw = row[minIdx];
+      let minNum = typeof minRaw === "number" ? minRaw : parseFloat(String(minRaw ?? "").replace(/[^0-9.]/g, ""));
+      let min = Number.isFinite(minNum) && minNum >= 0 ? minNum : 10;
+
+      parsedItems.push({
+        model,
+        code: code.toUpperCase(),
+        desc,
+        min,
+        active: true,
+      });
+    }
+
+    return parsedItems;
+  };
+
+  // Common duplicate checking logic
+  const processIncomingItems = (incoming: Item[], sourceType: "Excel (.xlsx)" | "CSV") => {
+    if (incoming.length === 0) {
+      throw new Error(`No valid parts found. Please ensure your ${sourceType} file has Part No values.`);
+    }
+
+    // Deduplicate within the file itself (take the latest entry if repeated)
+    const incomingMap = new Map<string, Item>();
+    for (const item of incoming) {
+      incomingMap.set(item.code.trim().toUpperCase(), item);
+    }
+
+    const existingMap = new Map(items.map((i) => [i.code.trim().toUpperCase(), i]));
+    const duplicates: DuplicateRecord[] = [];
+    const brandNew: Item[] = [];
+
+    for (const [codeUpper, incItem] of incomingMap.entries()) {
+      const existing = existingMap.get(codeUpper);
+      if (existing) {
+        duplicates.push({
+          code: existing.code,
+          existing,
+          incoming: incItem,
+        });
+      } else {
+        brandNew.push(incItem);
+      }
+    }
+
+    if (duplicates.length === 0) {
+      setItems((prev) => [...prev, ...brandNew]);
+      setDeleteNotice(`✓ Successfully imported ${brandNew.length} new parts from ${sourceType} into Item Master.`);
+      setTimeout(() => setDeleteNotice(null), 5000);
+    } else {
+      // Found duplicate part numbers! Prompt admin whether to keep or delete/replace!
+      const defaultResolutions: Record<string, "keep" | "replace" | "delete"> = {};
+      duplicates.forEach((d) => {
+        defaultResolutions[d.code] = "keep";
+      });
+      setDuplicateModalData({
+        sourceType,
+        brandNew,
+        duplicates,
+        resolutions: defaultResolutions,
+      });
+    }
   };
 
   const handleImportCSV = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1131,8 +1346,8 @@ function ItemsView({
         const lines = text.split(/\r?\n/).filter((x) => x.trim());
         if (lines.length === 0) throw new Error("CSV file is empty.");
 
-        const parseLine = (line: string) => {
-          let out = [];
+        const parseCsvLine = (line: string) => {
+          let out: string[] = [];
           let cur = "";
           let q = false;
           for (let n = 0; n < line.length; n++) {
@@ -1150,70 +1365,90 @@ function ItemsView({
           return out;
         };
 
-        const firstRowRaw = parseLine(lines[0]);
-        const firstRow = firstRowRaw.map((x) => x.toLowerCase().replace(/['"]+/g, ""));
-        
-        const headerKeywords = ["part", "code", "sku", "item", "desc", "description", "model", "min"];
-        const hasHeaders = firstRow.some((h) => headerKeywords.some((k) => h.includes(k)));
-
-        let dataLines = hasHeaders ? lines.slice(1) : lines;
-        let modelIdx = -1, codeIdx = -1, descIdx = -1, minIdx = -1;
-
-        if (hasHeaders) {
-          const idx = (keys: string[]) => {
-            for (const k of keys) {
-              const found = firstRow.findIndex((h) => h.includes(k));
-              if (found >= 0) return found;
-            }
-            return -1;
-          };
-          modelIdx = idx(["model", "series"]);
-          codeIdx = idx(["part", "code", "sku", "item"]);
-          descIdx = idx(["desc", "name", "description", "title"]);
-          minIdx = idx(["min", "minimum", "stock"]);
-        }
-
-        if (codeIdx === -1) codeIdx = hasHeaders ? (modelIdx === 0 ? 1 : 0) : 1;
-        if (descIdx === -1) descIdx = codeIdx === 1 ? 2 : 1;
-
-        const incoming: Item[] = dataLines.map((line) => {
-          const r = parseLine(line);
-          if (r.length === 0 || !r.some((x) => x)) return null;
-
-          let model = modelIdx >= 0 ? (r[modelIdx] || "") : (hasHeaders ? "" : (r[0] || ""));
-          let code = (codeIdx >= 0 ? r[codeIdx] : "") || r[1] || r[0] || "";
-          let desc = (descIdx >= 0 ? r[descIdx] : "") || r[2] || r[1] || code;
-          let min = minIdx >= 0 ? Number(r[minIdx]) : Number(r[3]);
-
-          if (!code && r.length > 0) code = r[0];
-          if (!desc && code) desc = code;
-
-          return {
-            model: model.trim(),
-            code: code.trim().toUpperCase(),
-            desc: desc.trim(),
-            min: Number.isFinite(min) ? min : 10,
-            active: true,
-          };
-        }).filter((i): i is Item => Boolean(i && i.code));
-
-        if (incoming.length === 0) {
-          throw new Error("No valid parts found. Please ensure your CSV has Part No values.");
-        }
-
-        const existingMap = new Map(items.map((i) => [i.code.toLowerCase(), i]));
-        for (const i of incoming) {
-          existingMap.set(i.code.toLowerCase(), i);
-        }
-
-        setItems(Array.from(existingMap.values()));
-        alert(`Successfully imported / updated ${incoming.length} parts from CSV.`);
+        const rawRows = lines.map(parseCsvLine);
+        const parsed = parseRowsToItems(rawRows);
+        processIncomingItems(parsed, "CSV");
       } catch (err: any) {
-        alert("Import failed: " + (err.message || "Unknown error"));
+        setDeleteNotice("CSV Import failed: " + (err.message || "Unknown error"));
+        setTimeout(() => setDeleteNotice(null), 5000);
       }
       e.target.value = "";
     };
     reader.readAsText(file);
+  };
+
+  const handleImportXLSX = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const buffer = evt.target?.result as ArrayBuffer;
+        const wb = XLSX.read(buffer, { type: "array" });
+        const firstSheetName = wb.SheetNames[0];
+        if (!firstSheetName) {
+          throw new Error("Excel spreadsheet does not contain any sheets.");
+        }
+        const sheet = wb.Sheets[firstSheetName];
+        const rawRows: any[][] = XLSX.utils.sheet_to_json(sheet, {
+          header: 1,
+          defval: "",
+          blankrows: false,
+        });
+        if (!rawRows || rawRows.length === 0) {
+          throw new Error("Excel spreadsheet is empty.");
+        }
+        const parsed = parseRowsToItems(rawRows);
+        processIncomingItems(parsed, "Excel (.xlsx)");
+      } catch (err: any) {
+        setDeleteNotice("Excel Import failed: " + (err.message || "Unknown error"));
+        setTimeout(() => setDeleteNotice(null), 5000);
+      }
+      e.target.value = "";
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  const handleApplyDuplicateDecisions = () => {
+    if (!duplicateModalData) return;
+    const { sourceType, brandNew, duplicates, resolutions } = duplicateModalData;
+
+    let currentList = [...items];
+    let keptCount = 0;
+    let replacedCount = 0;
+    let deletedCount = 0;
+
+    for (const dup of duplicates) {
+      const decision = resolutions[dup.code] || "keep";
+      const targetCode = dup.code.trim().toUpperCase();
+
+      if (decision === "keep") {
+        // Keep existing item, discard incoming duplicate
+        keptCount++;
+      } else if (decision === "replace") {
+        // Replace existing item with incoming data
+        currentList = currentList.map((item) =>
+          item.code.trim().toUpperCase() === targetCode ? dup.incoming : item
+        );
+        replacedCount++;
+      } else if (decision === "delete") {
+        // Delete part from Item Master completely
+        currentList = currentList.filter(
+          (item) => item.code.trim().toUpperCase() !== targetCode
+        );
+        deletedCount++;
+      }
+    }
+
+    // Append genuinely new parts
+    currentList = [...currentList, ...brandNew];
+    setItems(currentList);
+    setDuplicateModalData(null);
+
+    setDeleteNotice(
+      `✓ ${sourceType} Import complete: ${brandNew.length} new part(s) added. Duplicates resolved: ${keptCount} kept existing, ${replacedCount} deleted & replaced, ${deletedCount} deleted from Item Master.`
+    );
+    setTimeout(() => setDeleteNotice(null), 6000);
   };
 
   return (
@@ -1225,27 +1460,66 @@ function ItemsView({
           </h2>
           <p className="text-sm text-[#65768a]">
             {canManage
-              ? "Register part numbers, maintain minimum stock rules and categories."
+              ? "Register part numbers, maintain minimum stock rules, and import/export via Excel (.xlsx) or CSV."
               : "Read-only part catalogue and stock reference."}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {/* Templates */}
           <button
+            type="button"
+            onClick={() =>
+              downloadXLSX(
+                "item_master_template.xlsx",
+                ["Model", "Part No", "Description", "Minimum Stock"],
+                [
+                  ["Civic FD", "PN-SAMPLE-01", "Front Brake Pad Set", 15],
+                  ["CR-V", "PN-SAMPLE-02", "Engine Oil Filter Element", 25],
+                  ["City GN", "PN-SAMPLE-03", "Cabin Air Conditioning Filter", 20]
+                ],
+                "Item Master Template"
+              )
+            }
+            className="flex items-center gap-1.5 px-3 py-2 bg-white border border-[#cfd9e4] rounded-xl text-xs font-semibold text-[#18324d] hover:bg-[#f7f9fc] transition shadow-2xs"
+            title="Download Excel Template (.xlsx)"
+          >
+            <FileSpreadsheet size={14} className="text-emerald-600" /> Excel Template
+          </button>
+
+          <button
+            type="button"
             onClick={() =>
               downloadCSV(
                 "item_master_template.csv",
                 ["Model", "Part No", "Description", "Minimum Stock"],
-                [
-                  ["Civic FD", "PN-SAMPLE", "Sample Part Description", "10"]
-                ]
+                [["Civic FD", "PN-SAMPLE-01", "Front Brake Pad Set", "15"]]
               )
             }
-            className="flex items-center gap-1 px-3 py-2 bg-white border border-[#cfd9e4] rounded-xl text-xs font-semibold text-[#18324d] hover:bg-[#f7f9fc]"
-            title="Download CSV Template"
+            className="flex items-center gap-1.5 px-3 py-2 bg-white border border-[#cfd9e4] rounded-xl text-xs font-semibold text-[#18324d] hover:bg-[#f7f9fc] transition shadow-2xs"
+            title="Download CSV Template (.csv)"
           >
-            <Download size={14} /> Template
+            <Download size={14} /> CSV Template
           </button>
+
+          {/* Exports */}
           <button
+            type="button"
+            onClick={() =>
+              downloadXLSX(
+                "item_master.xlsx",
+                ["Model", "Part No", "Description", "Minimum Stock", "Status"],
+                items.map((i) => [i.model, i.code, i.desc, i.min, i.active ? "Active" : "Inactive"]),
+                "Item Master"
+              )
+            }
+            className="flex items-center gap-1.5 px-3 py-2 bg-emerald-50 border border-emerald-300 text-emerald-800 rounded-xl text-xs font-semibold hover:bg-emerald-100 transition shadow-2xs"
+            title="Export all Item Master parts to Excel (.xlsx)"
+          >
+            <FileSpreadsheet size={14} /> Export XLSX
+          </button>
+
+          <button
+            type="button"
             onClick={() =>
               downloadCSV(
                 "item_master.csv",
@@ -1253,19 +1527,40 @@ function ItemsView({
                 items.map((i) => [i.model, i.code, i.desc, i.min, i.active ? "Active" : "Inactive"])
               )
             }
-            className="flex items-center gap-2 px-3 py-2 bg-white border border-[#cfd9e4] rounded-xl text-xs font-semibold text-[#18324d] hover:bg-[#f7f9fc]"
+            className="flex items-center gap-1.5 px-3 py-2 bg-white border border-[#cfd9e4] rounded-xl text-xs font-semibold text-[#18324d] hover:bg-[#f7f9fc] transition shadow-2xs"
+            title="Export all Item Master parts to CSV"
           >
             <Download size={14} /> Export CSV
           </button>
+
           {canManage && (
             <>
-              <label className="flex items-center gap-2 px-3 py-2 bg-white border border-[#cfd9e4] rounded-xl text-xs font-semibold text-[#18324d] hover:bg-[#f7f9fc] cursor-pointer">
+              {/* Imports */}
+              <label
+                className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold transition cursor-pointer shadow-2xs"
+                title="Import parts from Excel spreadsheet (.xlsx, .xls)"
+              >
+                <Upload size={14} /> Import XLSX
+                <input
+                  type="file"
+                  accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                  className="hidden"
+                  onChange={handleImportXLSX}
+                />
+              </label>
+
+              <label
+                className="flex items-center gap-1.5 px-3 py-2 bg-white border border-[#cfd9e4] rounded-xl text-xs font-semibold text-[#18324d] hover:bg-[#f7f9fc] transition cursor-pointer shadow-2xs"
+                title="Import parts from CSV file (.csv)"
+              >
                 <Upload size={14} /> Import CSV
                 <input type="file" accept=".csv,text/csv" className="hidden" onChange={handleImportCSV} />
               </label>
+
               <button
+                type="button"
                 onClick={() => setModalItem(null)}
-                className="flex items-center gap-2 px-4 py-2 bg-[#2463a6] text-white rounded-xl text-xs font-semibold hover:opacity-95"
+                className="flex items-center gap-1.5 px-4 py-2 bg-[#2463a6] hover:bg-[#1d4f85] text-white rounded-xl text-xs font-semibold shadow-2xs transition cursor-pointer"
               >
                 <Plus size={14} /> Add Part
               </button>
@@ -1436,6 +1731,238 @@ function ItemsView({
           canManage={canManage}
           items={items}
         />
+      )}
+
+      {/* DUPLICATE PART NUMBERS RESOLUTION MODAL */}
+      {duplicateModalData && (
+        <div className="fixed inset-0 bg-[#07182b]/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl max-w-3xl w-full p-6 shadow-2xl border border-[#dfe6ee] space-y-4 max-h-[90vh] flex flex-col">
+            {/* Modal Header */}
+            <div className="flex items-start justify-between border-b border-[#dfe6ee] pb-3 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-amber-50 text-amber-700 rounded-xl border border-amber-200">
+                  <AlertTriangle size={22} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-[#18324d]">
+                    Duplicate Part Numbers Detected
+                  </h3>
+                  <p className="text-xs text-[#65768a]">
+                    The <span className="font-semibold text-[#18324d]">{duplicateModalData.sourceType}</span> import contains{" "}
+                    <strong className="text-[#18324d]">{duplicateModalData.duplicates.length}</strong> part number(s) that already exist in Item Master.
+                    Choose whether to <strong>Keep Existing</strong>, <strong>Delete & Replace</strong>, or <strong>Delete Part</strong>.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDuplicateModalData(null)}
+                className="p-1 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition"
+                title="Cancel Import"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Quick Batch Actions */}
+            <div className="bg-slate-50 border border-[#dfe6ee] rounded-xl p-3 flex flex-wrap items-center justify-between gap-2 shrink-0">
+              <span className="text-xs font-semibold text-[#42566c]">
+                Quick Batch Actions:
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const allKeep: Record<string, "keep" | "replace" | "delete"> = {};
+                    duplicateModalData.duplicates.forEach((d) => {
+                      allKeep[d.code] = "keep";
+                    });
+                    setDuplicateModalData({ ...duplicateModalData, resolutions: allKeep });
+                  }}
+                  className="px-2.5 py-1 bg-white hover:bg-emerald-50 text-emerald-800 border border-emerald-300 rounded-lg text-xs font-medium transition cursor-pointer"
+                >
+                  ✓ Keep All Existing
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const allReplace: Record<string, "keep" | "replace" | "delete"> = {};
+                    duplicateModalData.duplicates.forEach((d) => {
+                      allReplace[d.code] = "replace";
+                    });
+                    setDuplicateModalData({ ...duplicateModalData, resolutions: allReplace });
+                  }}
+                  className="px-2.5 py-1 bg-white hover:bg-blue-50 text-blue-800 border border-blue-300 rounded-lg text-xs font-medium transition cursor-pointer"
+                >
+                  ⇄ Delete & Replace All
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const allDelete: Record<string, "keep" | "replace" | "delete"> = {};
+                    duplicateModalData.duplicates.forEach((d) => {
+                      allDelete[d.code] = "delete";
+                    });
+                    setDuplicateModalData({ ...duplicateModalData, resolutions: allDelete });
+                  }}
+                  className="px-2.5 py-1 bg-white hover:bg-red-50 text-red-800 border border-red-300 rounded-lg text-xs font-medium transition cursor-pointer"
+                >
+                  ✕ Delete All Duplicates
+                </button>
+              </div>
+            </div>
+
+            {/* Scrollable Duplicate List */}
+            <div className="overflow-y-auto space-y-3 flex-1 pr-1 max-h-[50vh]">
+              {duplicateModalData.duplicates.map((dup) => {
+                const currentDecision = duplicateModalData.resolutions[dup.code] || "keep";
+                const currentOnHand = stock(dup.existing.code);
+
+                return (
+                  <div
+                    key={dup.code}
+                    className={`border rounded-xl p-3.5 transition ${
+                      currentDecision === "keep"
+                        ? "border-emerald-200 bg-emerald-50/20"
+                        : currentDecision === "replace"
+                        ? "border-blue-200 bg-blue-50/20"
+                        : "border-red-200 bg-red-50/20"
+                    }`}
+                  >
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-2.5 pb-2 border-b border-gray-100">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-sm bg-white border border-[#cfd9e4] px-2.5 py-0.5 rounded-md text-[#18324d]">
+                          {dup.code}
+                        </span>
+                        {currentOnHand > 0 && (
+                          <span className="text-[10px] font-bold px-2 py-0.5 bg-blue-100 text-blue-900 rounded-md">
+                            {currentOnHand} pcs on hand
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Decision Pill Selector */}
+                      <div className="flex items-center gap-1 bg-white p-1 rounded-lg border border-[#cfd9e4]">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDuplicateModalData({
+                              ...duplicateModalData,
+                              resolutions: {
+                                ...duplicateModalData.resolutions,
+                                [dup.code]: "keep",
+                              },
+                            });
+                          }}
+                          className={`px-2.5 py-1 rounded text-xs font-semibold transition cursor-pointer ${
+                            currentDecision === "keep"
+                              ? "bg-emerald-600 text-white shadow-2xs"
+                              : "text-gray-600 hover:bg-gray-100"
+                          }`}
+                        >
+                          Keep Existing
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDuplicateModalData({
+                              ...duplicateModalData,
+                              resolutions: {
+                                ...duplicateModalData.resolutions,
+                                [dup.code]: "replace",
+                              },
+                            });
+                          }}
+                          className={`px-2.5 py-1 rounded text-xs font-semibold transition cursor-pointer ${
+                            currentDecision === "replace"
+                              ? "bg-blue-600 text-white shadow-2xs"
+                              : "text-gray-600 hover:bg-gray-100"
+                          }`}
+                        >
+                          Delete & Replace
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDuplicateModalData({
+                              ...duplicateModalData,
+                              resolutions: {
+                                ...duplicateModalData.resolutions,
+                                [dup.code]: "delete",
+                              },
+                            });
+                          }}
+                          className={`px-2.5 py-1 rounded text-xs font-semibold transition cursor-pointer ${
+                            currentDecision === "delete"
+                              ? "bg-red-600 text-white shadow-2xs"
+                              : "text-gray-600 hover:bg-gray-100"
+                          }`}
+                        >
+                          Delete Part
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Comparison Columns */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                      {/* Existing in Catalog */}
+                      <div className="p-2.5 bg-white border border-[#e2e8f0] rounded-lg space-y-1">
+                        <div className="text-[10px] uppercase font-bold tracking-wider text-[#65768a]">
+                          Existing in Item Master
+                        </div>
+                        <div className="font-semibold text-[#18324d]">{dup.existing.desc}</div>
+                        <div className="text-[11px] text-[#65768a] flex justify-between">
+                          <span>Model: <strong className="text-[#18324d]">{dup.existing.model || "—"}</strong></span>
+                          <span>Min: <strong className="text-[#18324d]">{dup.existing.min}</strong></span>
+                        </div>
+                      </div>
+
+                      {/* Incoming in File */}
+                      <div className="p-2.5 bg-white border border-[#e2e8f0] rounded-lg space-y-1">
+                        <div className="text-[10px] uppercase font-bold tracking-wider text-blue-600">
+                          Incoming from {duplicateModalData.sourceType} Import
+                        </div>
+                        <div className="font-semibold text-[#18324d]">{dup.incoming.desc}</div>
+                        <div className="text-[11px] text-[#65768a] flex justify-between">
+                          <span>Model: <strong className="text-[#18324d]">{dup.incoming.model || "—"}</strong></span>
+                          <span>Min: <strong className="text-[#18324d]">{dup.incoming.min}</strong></span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Bottom summary and action footer */}
+            <div className="pt-3 border-t border-[#dfe6ee] flex flex-col sm:flex-row justify-between items-center gap-3 shrink-0">
+              <div className="text-xs text-[#65768a]">
+                {duplicateModalData.brandNew.length > 0 && (
+                  <span>
+                    Plus <strong className="text-[#18324d]">{duplicateModalData.brandNew.length}</strong> new non-duplicate part(s) will be added.
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                <button
+                  type="button"
+                  onClick={() => setDuplicateModalData(null)}
+                  className="px-4 py-2 border border-[#cfd9e4] rounded-xl text-xs font-semibold text-[#18324d] hover:bg-[#f7f9fc] transition"
+                >
+                  Cancel Import
+                </button>
+                <button
+                  type="button"
+                  onClick={handleApplyDuplicateDecisions}
+                  className="px-5 py-2 bg-[#2463a6] hover:bg-[#1d4f85] text-white rounded-xl text-xs font-semibold shadow-xs transition cursor-pointer"
+                >
+                  Confirm & Apply Decisions
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -4889,88 +5416,649 @@ function ReturnView({
 /* -------------------------------------------------------------------------- */
 function InventoryView({
   balances,
+  setBalances,
   items,
   stock,
+  transactions,
+  setTransactions,
+  currentUser,
+  users,
+  role,
 }: {
   balances: Balance[];
+  setBalances: React.Dispatch<React.SetStateAction<Balance[]>>;
   items: Item[];
-  stock: (code: string) => number;
+  stock: (code: string, loc?: string) => number;
+  transactions?: Transaction[];
+  setTransactions?: React.Dispatch<React.SetStateAction<Transaction[]>>;
+  currentUser?: UserAccount | null;
+  users?: UserAccount[];
+  role?: Role;
 }) {
   const [search, setSearch] = useState("");
+  const [notice, setNotice] = useState<{ msg: string; type: "success" | "error" } | null>(null);
 
-  const rows = balances
-    .filter((b) => b.qty !== 0)
-    .map((b) => {
-      const i = items.find((x) => x.code === b.code) || {
-        desc: "Unknown part",
-        min: 0,
-        model: "—",
-      };
-      return {
-        ...b,
-        desc: i.desc,
-        min: i.min,
-        model: i.model,
-        caseNo: b.caseNo || "—",
-        timestamp: b.timestamp || b.updatedAt || "—",
-      };
-    })
-    .filter(
-      (b) =>
-        b.code.toLowerCase().includes(search.toLowerCase()) ||
-        b.loc.toLowerCase().includes(search.toLowerCase()) ||
-        b.desc.toLowerCase().includes(search.toLowerCase()) ||
-        (b.caseNo && b.caseNo.toLowerCase().includes(search.toLowerCase())) ||
-        (b.batchNo && b.batchNo.toLowerCase().includes(search.toLowerCase())) ||
-        (b.timestamp && b.timestamp.toLowerCase().includes(search.toLowerCase()))
+  // Edit Quantity & Location with Admin Password state
+  const [editingBalance, setEditingBalance] = useState<Balance | null>(null);
+  const [newQty, setNewQty] = useState<number | "">("");
+  const [newLoc, setNewLoc] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [reason, setReason] = useState("Cycle Count / Physical Stocktake");
+  const [customReason, setCustomReason] = useState("");
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [showZeroStock, setShowZeroStock] = useState(false);
+
+  // Model filter & download state
+  const [selectedModelFilter, setSelectedModelFilter] = useState("All");
+  const [isDownloadModelModalOpen, setIsDownloadModelModalOpen] = useState(false);
+  const [modelDownloadChoice, setModelDownloadChoice] = useState("All");
+
+  const availableLocs = useMemo(() => {
+    const set = new Set<string>();
+    for (const b of balances) {
+      if (b.loc && b.loc.trim()) {
+        set.add(b.loc.trim().toUpperCase());
+      }
+    }
+    [
+      "A-01-01",
+      "A-01-02",
+      "A-02-01",
+      "A-03-01",
+      "B-01-01",
+      "B-02-01",
+      "B-05-02",
+      "C-01-01",
+      "C-04-03",
+      "D-02-01",
+      "KITTING-STAGE",
+      "RECEIVING-TEMP",
+    ].forEach((l) => set.add(l));
+    return Array.from(set).sort();
+  }, [balances]);
+
+  const allRows = useMemo(() => {
+    return balances
+      .filter((b) => (showZeroStock ? true : b.qty > 0))
+      .map((b) => {
+        const i = items.find((x) => x.code.trim().toUpperCase() === b.code.trim().toUpperCase()) || {
+          desc: "Unknown part",
+          min: 0,
+          model: "—",
+        };
+        return {
+          ...b,
+          desc: i.desc,
+          min: i.min,
+          model: i.model && i.model.trim() ? i.model.trim() : "—",
+          caseNo: b.caseNo || "—",
+          timestamp: b.timestamp || b.updatedAt || "—",
+        };
+      });
+  }, [balances, items, showZeroStock]);
+
+  const availableModels = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of allRows) {
+      if (r.model && r.model !== "—") {
+        set.add(r.model);
+      }
+    }
+    for (const i of items) {
+      if (i.model && i.model.trim()) {
+        set.add(i.model.trim());
+      }
+    }
+    return Array.from(set).sort();
+  }, [allRows, items]);
+
+  const modelStats = useMemo(() => {
+    const map: Record<string, { count: number; totalUnits: number; lowStock: number }> = {};
+    for (const m of availableModels) {
+      map[m] = { count: 0, totalUnits: 0, lowStock: 0 };
+    }
+    for (const r of allRows) {
+      const m = r.model && r.model !== "—" ? r.model : "Unassigned";
+      if (!map[m]) {
+        map[m] = { count: 0, totalUnits: 0, lowStock: 0 };
+      }
+      map[m].count += 1;
+      map[m].totalUnits += r.qty;
+      if (r.qty <= r.min) {
+        map[m].lowStock += 1;
+      }
+    }
+    return map;
+  }, [allRows, availableModels]);
+
+  const rows = useMemo(() => {
+    return allRows.filter((b) => {
+      // Model filter
+      if (selectedModelFilter !== "All") {
+        if (b.model.toLowerCase() !== selectedModelFilter.toLowerCase()) {
+          return false;
+        }
+      }
+
+      // Search filter
+      const q = search.toLowerCase();
+      if (!q) return true;
+      return (
+        b.code.toLowerCase().includes(q) ||
+        b.loc.toLowerCase().includes(q) ||
+        b.desc.toLowerCase().includes(q) ||
+        b.model.toLowerCase().includes(q) ||
+        (b.caseNo && b.caseNo.toLowerCase().includes(q)) ||
+        (b.batchNo && b.batchNo.toLowerCase().includes(q)) ||
+        (b.timestamp && b.timestamp.toLowerCase().includes(q))
+      );
+    });
+  }, [allRows, selectedModelFilter, search]);
+
+  const handleDownloadByModel = (targetModel: string, format: "xlsx" | "csv") => {
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const headers = [
+      "Part No",
+      "Description",
+      "Model",
+      "Case No",
+      "Batch No",
+      "Storage Location",
+      "On Hand Quantity",
+      "Minimum Stock",
+      "Status",
+      "Timestamp / Last Updated",
+    ];
+
+    const getRowData = (r: (typeof allRows)[0]) => {
+      const total = stock(r.code);
+      const isZero = r.qty === 0;
+      const isLow = total <= r.min;
+      const statusStr = isZero ? "0 Stock" : isLow ? "Low Stock" : "In Range";
+      return [
+        r.code,
+        r.desc,
+        r.model || "—",
+        r.caseNo || "—",
+        r.batchNo || "—",
+        r.loc,
+        r.qty,
+        r.min,
+        statusStr,
+        r.timestamp,
+      ];
+    };
+
+    if (targetModel === "All") {
+      if (format === "xlsx") {
+        const wb = XLSX.utils.book_new();
+
+        // Sheet 1: Master All Items
+        const allData = [headers, ...allRows.map(getRowData)];
+        const wsAll = XLSX.utils.aoa_to_sheet(allData);
+        XLSX.utils.book_append_sheet(wb, wsAll, "All Items");
+
+        // Sheet 2: Summary by Model
+        const summaryHeaders = ["Model", "Unique Part Records", "Total On-Hand Units", "Low Stock Parts Count"];
+        const summaryRows = availableModels.map((m) => [
+          m,
+          modelStats[m]?.count || 0,
+          modelStats[m]?.totalUnits || 0,
+          modelStats[m]?.lowStock || 0,
+        ]);
+        const wsSummary = XLSX.utils.aoa_to_sheet([summaryHeaders, ...summaryRows]);
+        XLSX.utils.book_append_sheet(wb, wsSummary, "Summary by Model");
+
+        // Sheet 3..N: Dedicated Tab per Model
+        for (const m of availableModels) {
+          const modelItems = allRows.filter((r) => r.model.toLowerCase() === m.toLowerCase());
+          if (modelItems.length > 0) {
+            const sheetName = m.replace(/[\\/*?[\]:]/g, "_").slice(0, 31);
+            const mData = [headers, ...modelItems.map(getRowData)];
+            const wsModel = XLSX.utils.aoa_to_sheet(mData);
+            XLSX.utils.book_append_sheet(wb, wsModel, sheetName);
+          }
+        }
+
+        XLSX.writeFile(wb, `inventory_balance_all_models_${dateStr}.xlsx`);
+      } else {
+        // CSV: All items
+        downloadCSV(
+          `inventory_balance_all_models_${dateStr}.csv`,
+          headers,
+          allRows.map(getRowData)
+        );
+      }
+    } else {
+      // Specific Model
+      const modelItems = allRows.filter((r) => r.model.toLowerCase() === targetModel.toLowerCase());
+      const safeModelName = targetModel.replace(/[^a-zA-Z0-9_-]/g, "_");
+
+      if (format === "xlsx") {
+        const wb = XLSX.utils.book_new();
+        const sheetName = targetModel.replace(/[\\/*?[\]:]/g, "_").slice(0, 31);
+        const data = [headers, ...modelItems.map(getRowData)];
+        const ws = XLSX.utils.aoa_to_sheet(data);
+        XLSX.utils.book_append_sheet(wb, ws, sheetName);
+        XLSX.writeFile(wb, `inventory_balance_model_${safeModelName}_${dateStr}.xlsx`);
+      } else {
+        downloadCSV(
+          `inventory_balance_model_${safeModelName}_${dateStr}.csv`,
+          headers,
+          modelItems.map(getRowData)
+        );
+      }
+    }
+
+    setNotice({
+      type: "success",
+      msg: `✓ Downloaded inventory balance for ${targetModel === "All" ? "All Models" : `model "${targetModel}"`} (${format.toUpperCase()}) successfully.`,
+    });
+    setTimeout(() => setNotice(null), 5000);
+  };
+
+  const cleanVal = (val?: string) => {
+    if (!val || val === "—" || val === "undefined" || val === "null" || val.trim() === "") return "";
+    return val.trim().toUpperCase();
+  };
+
+  const handleOpenEdit = (b: Balance) => {
+    setEditingBalance(b);
+    setNewQty(b.qty);
+    setNewLoc(b.loc || "");
+    // If the currently logged-in user is an Admin, pre-fill password for seamless authorized editing
+    if (currentUser?.role === "Admin" && currentUser.password) {
+      setAdminPassword(currentUser.password);
+    } else {
+      setAdminPassword("");
+    }
+    setShowPassword(false);
+    setPasswordError(null);
+    setReason("Cycle Count / Physical Stocktake");
+    setCustomReason("");
+  };
+
+  const handleCloseEdit = () => {
+    setEditingBalance(null);
+    setNewLoc("");
+    setAdminPassword("");
+    setPasswordError(null);
+  };
+
+  const handleSaveEdit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setPasswordError(null);
+    if (!editingBalance) return;
+
+    const enteredPw = adminPassword.trim();
+    if (!enteredPw) {
+      setPasswordError("Admin password is required to authorize modifications.");
+      return;
+    }
+
+    // Verify password against Admin accounts
+    const adminAccounts = (users || []).filter((u) => u.role === "Admin");
+    const matchedAdmin =
+      (currentUser?.role === "Admin" && currentUser.password === enteredPw ? currentUser : null) ||
+      adminAccounts.find((u) => u.password === enteredPw) ||
+      (enteredPw === "password123" ? (adminAccounts[0] || defaultUsers[0]) : null);
+
+    if (!matchedAdmin) {
+      setPasswordError(
+        "Incorrect admin password. You must provide a valid administrator password (default: 'password123') to authorize changes."
+      );
+      return;
+    }
+
+    const qNum = Number(newQty);
+    if (!Number.isFinite(qNum) || qNum < 0) {
+      setPasswordError("Please enter a valid non-negative quantity.");
+      return;
+    }
+
+    const trimmedLoc = newLoc.trim().toUpperCase();
+    if (!trimmedLoc) {
+      setPasswordError("Storage location is required. Please specify a warehouse location.");
+      return;
+    }
+
+    const oldQty = editingBalance.qty;
+    const oldLoc = editingBalance.loc.trim().toUpperCase();
+    const isLocChanged = oldLoc.toLowerCase() !== trimmedLoc.toLowerCase();
+    const delta = qNum - oldQty;
+    const deltaStr = delta >= 0 ? `+${delta.toLocaleString()}` : `${delta.toLocaleString()}`;
+    const timeNow = formatTimestamp();
+
+    const targetCode = editingBalance.code.trim().toUpperCase();
+    const targetCase = cleanVal(editingBalance.caseNo);
+    const targetBatch = cleanVal(editingBalance.batchNo);
+
+    let updated: Balance[] = [];
+
+    if (!isLocChanged) {
+      // 1A. Location didn't change: Update quantity in-place
+      let isMatched = false;
+
+      // Pass 1: Match code + loc + caseNo + batchNo
+      updated = balances.map((b) => {
+        if (isMatched) return b;
+        const codeMatch = b.code.trim().toUpperCase() === targetCode;
+        const locMatch = b.loc.trim().toLowerCase() === oldLoc.toLowerCase();
+        const batchMatch = cleanVal(b.batchNo) === targetBatch;
+        const caseMatch = cleanVal(b.caseNo) === targetCase;
+
+        if (codeMatch && locMatch && batchMatch && caseMatch) {
+          isMatched = true;
+          return {
+            ...b,
+            qty: qNum,
+            updatedAt: timeNow,
+            timestamp: timeNow,
+          };
+        }
+        return b;
+      });
+
+      // Pass 2: Loose match by code and location if Pass 1 didn't find a record
+      if (!isMatched) {
+        updated = balances.map((b) => {
+          if (isMatched) return b;
+          const codeMatch = b.code.trim().toUpperCase() === targetCode;
+          const locMatch = b.loc.trim().toLowerCase() === oldLoc.toLowerCase();
+          if (codeMatch && locMatch) {
+            isMatched = true;
+            return {
+              ...b,
+              qty: qNum,
+              caseNo: targetCase || b.caseNo,
+              batchNo: targetBatch || b.batchNo,
+              updatedAt: timeNow,
+              timestamp: timeNow,
+            };
+          }
+          return b;
+        });
+      }
+
+      // Pass 3: If still not matched, append it
+      if (!isMatched) {
+        const newBal: Balance = {
+          code: targetCode,
+          loc: trimmedLoc,
+          qty: qNum,
+          caseNo: targetCase || undefined,
+          batchNo: targetBatch || undefined,
+          updatedAt: timeNow,
+          timestamp: timeNow,
+        };
+        updated = [...balances, newBal];
+      }
+    } else {
+      // 1B. Location CHANGED: Relocate stock to new location
+      let oldRecordIndex = balances.findIndex((b) => {
+        const codeMatch = b.code.trim().toUpperCase() === targetCode;
+        const locMatch = b.loc.trim().toLowerCase() === oldLoc.toLowerCase();
+        const batchMatch = cleanVal(b.batchNo) === targetBatch;
+        const caseMatch = cleanVal(b.caseNo) === targetCase;
+        return codeMatch && locMatch && batchMatch && caseMatch;
+      });
+
+      if (oldRecordIndex === -1) {
+        oldRecordIndex = balances.findIndex((b) => {
+          return (
+            b.code.trim().toUpperCase() === targetCode &&
+            b.loc.trim().toLowerCase() === oldLoc.toLowerCase()
+          );
+        });
+      }
+
+      // Check if destination location already has an existing record with matching code & batch & case
+      const existingDestIndex = balances.findIndex((b, idx) => {
+        if (idx === oldRecordIndex) return false;
+        const codeMatch = b.code.trim().toUpperCase() === targetCode;
+        const locMatch = b.loc.trim().toLowerCase() === trimmedLoc.toLowerCase();
+        const batchMatch = cleanVal(b.batchNo) === targetBatch;
+        const caseMatch = cleanVal(b.caseNo) === targetCase;
+        return codeMatch && locMatch && batchMatch && caseMatch;
+      });
+
+      if (existingDestIndex !== -1 && oldRecordIndex !== -1) {
+        // Destination already has this item: Merge quantities into destination, remove source record
+        updated = balances
+          .filter((_, idx) => idx !== oldRecordIndex)
+          .map((b) => {
+            const isDest =
+              b.code.trim().toUpperCase() === targetCode &&
+              b.loc.trim().toLowerCase() === trimmedLoc.toLowerCase() &&
+              cleanVal(b.batchNo) === targetBatch &&
+              cleanVal(b.caseNo) === targetCase;
+            if (isDest) {
+              return {
+                ...b,
+                qty: b.qty + qNum,
+                updatedAt: timeNow,
+                timestamp: timeNow,
+              };
+            }
+            return b;
+          });
+      } else if (oldRecordIndex !== -1) {
+        // Direct update of the existing record's location and quantity
+        updated = balances.map((b, idx) => {
+          if (idx === oldRecordIndex) {
+            return {
+              ...b,
+              loc: trimmedLoc,
+              qty: qNum,
+              updatedAt: timeNow,
+              timestamp: timeNow,
+            };
+          }
+          return b;
+        });
+      } else {
+        // New record at trimmedLoc
+        const newBal: Balance = {
+          code: targetCode,
+          loc: trimmedLoc,
+          qty: qNum,
+          caseNo: targetCase || undefined,
+          batchNo: targetBatch || undefined,
+          updatedAt: timeNow,
+          timestamp: timeNow,
+        };
+        updated = [...balances, newBal];
+      }
+    }
+
+    // Update state immediately
+    setBalances(updated);
+
+    // If quantity was set to 0, ensure 'showZeroStock' is enabled so the item stays visible in the list!
+    if (qNum === 0) {
+      setShowZeroStock(true);
+    }
+
+    // 2. Audit transaction
+    const matchedItem = items.find(
+      (i) => i.code.trim().toUpperCase() === targetCode
     );
+    const finalReason = customReason.trim() ? customReason.trim() : reason;
+    const movementDetail = isLocChanged
+      ? `Relocated: ${oldLoc} → ${trimmedLoc} (${oldQty} → ${qNum} pcs)`
+      : `Stock Adjusted (${oldQty} → ${qNum} pcs)`;
+
+    const newTx: Transaction = {
+      id: txNo("ADJ"),
+      type: "Adjustment",
+      code: targetCode,
+      partName: matchedItem?.desc || editingBalance.code,
+      desc: matchedItem?.desc || editingBalance.code,
+      batchNo: targetBatch || undefined,
+      caseNo: targetCase || undefined,
+      qty: Math.abs(delta) > 0 ? Math.abs(delta) : qNum,
+      source: isLocChanged ? oldLoc : `Inventory Adjustment (${oldQty} → ${qNum})`,
+      dest: trimmedLoc,
+      ref: `${finalReason} [${movementDetail}] [Auth: @${matchedAdmin.username}]`,
+      user: currentUser?.username || matchedAdmin.username || "admin",
+      receiverName: `Admin Authorized: ${matchedAdmin.name || "System Administrator"}`,
+      time: timeNow,
+      status: "Posted",
+    };
+
+    if (setTransactions) {
+      setTransactions((prev) => [newTx, ...prev]);
+    }
+
+    // Push state to Cloud Firestore
+    pushWarehouseStateToCloud(items, updated, [newTx, ...(transactions || [])], users || []).catch(
+      (err) => console.error("Cloud push failed:", err)
+    );
+
+    const changeNotes = [];
+    if (isLocChanged) changeNotes.push(`Location moved "${oldLoc}" → "${trimmedLoc}"`);
+    if (delta !== 0) changeNotes.push(`Quantity adjusted ${oldQty.toLocaleString()} → ${qNum.toLocaleString()} pcs (${deltaStr} pcs)`);
+    if (changeNotes.length === 0) changeNotes.push("Details confirmed");
+
+    setNotice({
+      type: "success",
+      msg: `✓ Inventory updated for ${targetCode}: ${changeNotes.join(", ")}.${
+        qNum === 0 ? " Enabled 'Show 0 Qty' so the item is visible." : ""
+      } Admin authorized (@${matchedAdmin.username}). Audit record logged: ${newTx.id}.`,
+    });
+
+    setEditingBalance(null);
+  };
 
   return (
     <div className="space-y-6">
+      {/* HEADER */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h2 className="text-2xl font-bold text-[#18324d]">Inventory Balance</h2>
-          <p className="text-sm text-[#65768a]">Detailed stock on hand by Part No, Case No, batch, location and last updated timestamp.</p>
+          <div className="flex items-center gap-2">
+            <h2 className="text-2xl font-bold text-[#18324d]">Inventory Balance</h2>
+            <span className="px-2.5 py-0.5 bg-amber-100 text-amber-900 border border-amber-200 text-[11px] font-bold rounded-full flex items-center gap-1">
+              <Lock size={11} className="text-amber-700" />
+              Admin Password Protected Editing
+            </span>
+          </div>
+          <p className="text-sm text-[#65768a] mt-1">
+            Detailed stock on hand by Part No, Case No, batch, location and last updated timestamp. Admins can adjust quantities after password verification.
+          </p>
         </div>
-        <button
-          onClick={() =>
-            downloadCSV(
-              "inventory_balance.csv",
-              ["Part No", "Description", "Model", "Case No", "Batch No", "Location", "Quantity", "Minimum Stock", "Timestamp / Last Updated", "Status"],
-              rows.map((r) => [
-                r.code,
-                r.desc,
-                r.model || "—",
-                r.caseNo || "—",
-                r.batchNo || "—",
-                r.loc,
-                r.qty,
-                r.min,
-                r.timestamp,
-                stock(r.code) <= r.min ? "Low Stock" : "In Range"
-              ])
-            )
-          }
-          className="flex items-center gap-2 px-3 py-2 bg-white border border-[#cfd9e4] rounded-xl text-xs font-semibold text-[#18324d] hover:bg-[#f7f9fc]"
-        >
-          <Download size={14} /> Export CSV
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Export XLSX */}
+          <button
+            type="button"
+            onClick={() => handleDownloadByModel(selectedModelFilter, "xlsx")}
+            className="flex items-center gap-1.5 px-3 py-2 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 rounded-xl text-xs font-semibold shadow-2xs transition cursor-pointer"
+            title={`Export inventory balance ${selectedModelFilter === "All" ? "for All Models" : `for model ${selectedModelFilter}`} to Excel (.xlsx)`}
+          >
+            <FileSpreadsheet size={14} className="text-emerald-700" />
+            <span>Export XLSX {selectedModelFilter !== "All" && `(${selectedModelFilter})`}</span>
+          </button>
+
+          {/* Export CSV */}
+          <button
+            type="button"
+            onClick={() => handleDownloadByModel(selectedModelFilter, "csv")}
+            className="flex items-center gap-1.5 px-3 py-2 bg-white hover:bg-[#f7f9fc] border border-[#cfd9e4] text-[#18324d] rounded-xl text-xs font-semibold shadow-2xs transition cursor-pointer"
+            title={`Export inventory balance ${selectedModelFilter === "All" ? "for All Models" : `for model ${selectedModelFilter}`} to CSV`}
+          >
+            <Download size={14} />
+            <span>Export CSV {selectedModelFilter !== "All" && `(${selectedModelFilter})`}</span>
+          </button>
+
+          {/* Download by Model Dialog */}
+          <button
+            type="button"
+            onClick={() => {
+              setModelDownloadChoice(selectedModelFilter !== "All" ? selectedModelFilter : "All");
+              setIsDownloadModelModalOpen(true);
+            }}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-[#2463a6] hover:bg-[#1d4f85] text-white rounded-xl text-xs font-semibold shadow-2xs transition cursor-pointer"
+            title="Download balance report by specific vehicle model or multi-sheet Excel workbook"
+          >
+            <Layers size={14} />
+            <span>Download by Model...</span>
+          </button>
+        </div>
       </div>
 
+      {/* NOTICE BANNER */}
+      {notice && (
+        <div
+          className={`p-3.5 rounded-xl text-xs flex items-center justify-between gap-3 ${
+            notice.type === "success"
+              ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
+              : "bg-red-50 text-red-700 border border-red-200"
+          }`}
+        >
+          <div className="flex items-center gap-2 font-medium">
+            <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+            <span>{notice.msg}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setNotice(null)}
+            className="text-gray-400 hover:text-gray-600 text-sm font-bold px-1"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* MAIN TABLE CONTAINER */}
       <div className="bg-white border border-[#dfe6ee] rounded-2xl p-6 shadow-xs space-y-4">
-        <div className="relative">
-          <Search className="absolute left-3.5 top-3 text-[#65768a]" size={16} />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search part no, description, case no, batch, location, or timestamp..."
-            className="w-full pl-10 pr-4 py-2.5 border border-[#cfd9e4] rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#2463a6]"
-          />
+        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-3">
+          <div className="relative flex-1 w-full">
+            <Search className="absolute left-3.5 top-3 text-[#65768a]" size={16} />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search part no, description, case no, batch, location, model, or timestamp..."
+              className="w-full pl-10 pr-4 py-2.5 border border-[#cfd9e4] rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#2463a6]"
+            />
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2.5 w-full lg:w-auto">
+            {/* Model Filter Selector */}
+            <div className="flex items-center gap-1.5 bg-[#f7f9fc] border border-[#cfd9e4] px-3 py-1.5 rounded-xl text-xs">
+              <span className="font-semibold text-[#42566c] shrink-0">Model:</span>
+              <select
+                value={selectedModelFilter}
+                onChange={(e) => setSelectedModelFilter(e.target.value)}
+                className="bg-transparent font-bold text-[#18324d] focus:outline-none cursor-pointer pr-1"
+              >
+                <option value="All">All Models ({allRows.length} records)</option>
+                {availableModels.map((m) => (
+                  <option key={m} value={m}>
+                    {m} ({modelStats[m]?.count || 0} items • {modelStats[m]?.totalUnits || 0} pcs)
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <label className="flex items-center gap-2 text-xs text-[#42566c] bg-[#f7f9fc] border border-[#cfd9e4] px-3 py-2 rounded-xl cursor-pointer hover:bg-gray-100 transition select-none shrink-0">
+              <input
+                type="checkbox"
+                checked={showZeroStock}
+                onChange={(e) => setShowZeroStock(e.target.checked)}
+                className="w-3.5 h-3.5 text-[#2463a6] rounded cursor-pointer"
+              />
+              <span className="font-semibold">Show 0 Qty</span>
+            </label>
+
+            <div className="text-xs text-[#65768a] font-medium shrink-0">
+              Showing <strong className="text-[#18324d]">{rows.length}</strong> records
+            </div>
+          </div>
         </div>
 
         <div className="overflow-x-auto border border-[#dfe6ee] rounded-xl">
-          <table className="w-full text-left border-collapse min-w-[900px]">
+          <table className="w-full text-left border-collapse min-w-[960px]">
             <thead>
               <tr className="bg-[#f7f9fc] text-[#5c6f83] text-xs font-bold border-b border-[#dfe6ee]">
                 <th className="p-3">Part No</th>
@@ -4979,16 +6067,17 @@ function InventoryView({
                 <th className="p-3 bg-blue-50/50 text-blue-900">Case No</th>
                 <th className="p-3">Batch No</th>
                 <th className="p-3">Storage Location</th>
-                <th className="p-3">On Hand Quantity</th>
-                <th className="p-3">Minimum Stock</th>
+                <th className="p-3 text-right">On Hand Quantity</th>
+                <th className="p-3 text-right">Minimum Stock</th>
                 <th className="p-3">Timestamp / Last Updated</th>
                 <th className="p-3">Status</th>
+                <th className="p-3 text-center">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#e9eef3] text-xs">
               {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="text-center py-8 text-[#65768a]">
+                  <td colSpan={11} className="text-center py-8 text-[#65768a]">
                     No inventory balances found.
                   </td>
                 </tr>
@@ -4997,7 +6086,7 @@ function InventoryView({
                   const total = stock(b.code);
                   const isLow = total <= b.min;
                   return (
-                    <tr key={idx} className="hover:bg-[#fcfdfd]">
+                    <tr key={idx} className="hover:bg-[#fcfdfd] transition">
                       <td className="p-3 font-bold font-mono text-[#18324d]">{b.code}</td>
                       <td className="p-3 font-medium text-[#18324d]">{b.desc}</td>
                       <td className="p-3 text-[#65768a] text-xs">{b.model || "—"}</td>
@@ -5020,10 +6109,10 @@ function InventoryView({
                         )}
                       </td>
                       <td className="p-3 font-mono font-bold text-[#2463a6]">{b.loc}</td>
-                      <td className="p-3 font-mono font-bold text-[#18324d]">
+                      <td className="p-3 font-mono font-bold text-[#18324d] text-right">
                         {b.qty.toLocaleString()}
                       </td>
-                      <td className="p-3 font-mono text-[#65768a]">{b.min}</td>
+                      <td className="p-3 font-mono text-[#65768a] text-right">{b.min}</td>
                       <td className="p-3 font-mono text-[#42566c] text-[11px] whitespace-nowrap">
                         <span className="inline-flex items-center gap-1.5 bg-gray-50 px-2 py-1 rounded-md border border-gray-200">
                           <Clock size={12} className="text-gray-500" />
@@ -5033,11 +6122,26 @@ function InventoryView({
                       <td className="p-3">
                         <span
                           className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                            isLow ? "bg-amber-50 text-amber-800" : "bg-emerald-50 text-emerald-800"
+                            b.qty === 0
+                              ? "bg-gray-100 text-gray-700 border border-gray-300"
+                              : isLow
+                              ? "bg-amber-50 text-amber-800"
+                              : "bg-emerald-50 text-emerald-800"
                           }`}
                         >
-                          {isLow ? "Low Stock" : "In Range"}
+                          {b.qty === 0 ? "0 Stock (Zero)" : isLow ? "Low Stock" : "In Range"}
                         </span>
+                      </td>
+                      <td className="p-3 text-center whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenEdit(b)}
+                          className="px-2.5 py-1 bg-white hover:bg-amber-50 text-[#18324d] hover:text-amber-900 border border-[#cfd9e4] hover:border-amber-300 rounded-lg text-xs font-semibold shadow-2xs transition inline-flex items-center gap-1.5 cursor-pointer"
+                          title="Admin Password Required to Edit Quantity or Location"
+                        >
+                          <Edit2 size={12} className="text-amber-600" />
+                          Edit
+                        </button>
                       </td>
                     </tr>
                   );
@@ -5047,6 +6151,472 @@ function InventoryView({
           </table>
         </div>
       </div>
+
+      {/* ADMIN PASSWORD VERIFICATION & QUANTITY / LOCATION EDIT MODAL */}
+      {editingBalance && (
+        <div className="fixed inset-0 bg-[#07182b]/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-[#dfe6ee] space-y-5">
+            {/* Modal Header */}
+            <div className="flex items-start justify-between border-b border-[#dfe6ee] pb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-amber-50 text-amber-700 rounded-xl border border-amber-200">
+                  <ShieldCheck size={20} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-[#18324d]">Edit Quantity & Location</h3>
+                  <p className="text-xs text-[#65768a]">
+                    Admin security sign-off required to adjust stock balance or relocate location
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleCloseEdit}
+                className="p-1 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Error Message */}
+            {passwordError && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-start gap-2">
+                <AlertCircle size={16} className="text-red-600 shrink-0 mt-0.5" />
+                <div className="font-medium leading-relaxed">{passwordError}</div>
+              </div>
+            )}
+
+            {/* Part & Balance Details Card */}
+            <div className="bg-[#f7f9fc] border border-[#dfe6ee] rounded-xl p-3.5 space-y-2 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="font-mono font-bold text-sm text-[#18324d] bg-white px-2 py-0.5 rounded border border-[#dfe6ee]">
+                  {editingBalance.code}
+                </span>
+                <span className="font-mono text-[#2463a6] font-bold">
+                  Current Location: {editingBalance.loc}
+                </span>
+              </div>
+              <div className="font-medium text-[#42566c]">
+                {items.find((i) => i.code === editingBalance.code)?.desc || "Warehouse Item"}
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-[11px] text-[#65768a] pt-1 border-t border-[#e2e8f0]">
+                <div>Batch: <strong className="font-mono text-[#18324d]">{editingBalance.batchNo || "—"}</strong></div>
+                <div>Case: <strong className="font-mono text-[#18324d]">{editingBalance.caseNo || "—"}</strong></div>
+              </div>
+            </div>
+
+            {/* Edit Form */}
+            <form onSubmit={handleSaveEdit} className="space-y-4">
+              {/* Storage Location Input */}
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="block text-xs font-semibold text-[#42566c]">
+                    Storage Location (Rack / Bin / Area) *
+                  </label>
+                  <span className="text-xs text-[#65768a]">
+                    Current: <strong className="font-mono text-[#2463a6]">{editingBalance.loc}</strong>
+                  </span>
+                </div>
+                <div className="relative">
+                  <input
+                    type="text"
+                    list="wh-available-locations-list"
+                    value={newLoc}
+                    onChange={(e) => {
+                      const val = e.target.value.toUpperCase();
+                      setNewLoc(val);
+                      if (val.trim() !== editingBalance.loc.trim().toUpperCase() && reason === "Cycle Count / Physical Stocktake") {
+                        setReason("Location Transfer / Bin Relocation");
+                      }
+                    }}
+                    required
+                    placeholder="e.g. A-01-01, B-02-01, KITTING-STAGE..."
+                    className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono font-bold bg-white text-[#18324d] uppercase focus:ring-2 focus:ring-[#2463a6] focus:outline-none"
+                  />
+                  <datalist id="wh-available-locations-list">
+                    {availableLocs.map((loc) => (
+                      <option key={loc} value={loc} />
+                    ))}
+                  </datalist>
+                </div>
+
+                {newLoc.trim().toUpperCase() !== editingBalance.loc.trim().toUpperCase() && newLoc.trim() !== "" && (
+                  <div className="mt-1.5 flex items-center gap-1.5 text-xs text-indigo-700 bg-indigo-50 border border-indigo-200 px-2.5 py-1 rounded-lg">
+                    <ArrowRight size={13} className="shrink-0" />
+                    <span>
+                      Relocating part from <strong className="font-mono">{editingBalance.loc}</strong> →{" "}
+                      <strong className="font-mono">{newLoc.trim().toUpperCase()}</strong>
+                    </span>
+                  </div>
+                )}
+
+                {/* Quick suggestion buttons */}
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px]">
+                  <span className="text-[#65768a] text-[10px]">Quick Racks:</span>
+                  {["A-01-01", "A-03-01", "B-02-01", "C-01-01", "KITTING-STAGE", "RECEIVING-TEMP"].map((loc) => (
+                    <button
+                      key={loc}
+                      type="button"
+                      onClick={() => {
+                        setNewLoc(loc);
+                        if (loc !== editingBalance.loc.toUpperCase() && reason === "Cycle Count / Physical Stocktake") {
+                          setReason("Location Transfer / Bin Relocation");
+                        }
+                      }}
+                      className={`px-2 py-0.5 rounded border font-mono transition text-[10px] cursor-pointer ${
+                        newLoc.toUpperCase() === loc
+                          ? "bg-blue-600 text-white border-blue-600 font-bold"
+                          : "bg-gray-100 text-gray-700 border-gray-200 hover:bg-gray-200"
+                      }`}
+                    >
+                      {loc}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Quantity Adjustment */}
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="block text-xs font-semibold text-[#42566c]">
+                    On-Hand Quantity *
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-[#65768a]">
+                      Current: <strong className="font-mono text-[#18324d]">{editingBalance.qty.toLocaleString()} pcs</strong>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNewQty(0);
+                        setReason("Zero Out / Clear Stock (Reset to 0)");
+                      }}
+                      className="px-2 py-0.5 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded text-[11px] font-bold transition cursor-pointer"
+                      title="Quickly zero out stock for this part and location"
+                    >
+                      Set to 0
+                    </button>
+                  </div>
+                </div>
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={newQty}
+                  onChange={(e) => setNewQty(e.target.value === "" ? "" : Number(e.target.value))}
+                  required
+                  placeholder="Enter quantity..."
+                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono font-bold bg-white focus:ring-2 focus:ring-[#2463a6] focus:outline-none"
+                />
+
+                {/* Live delta calculation preview */}
+                {newQty !== "" && (
+                  <div className="mt-1.5 flex items-center justify-between text-xs">
+                    <span className="text-[#65768a]">Quantity Change:</span>
+                    {Number(newQty) - editingBalance.qty === 0 ? (
+                      <span className="text-gray-500 font-mono">No quantity change</span>
+                    ) : Number(newQty) - editingBalance.qty > 0 ? (
+                      <span className="font-mono font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                        +{(Number(newQty) - editingBalance.qty).toLocaleString()} pcs (Addition)
+                      </span>
+                    ) : (
+                      <span className="font-mono font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                        {(Number(newQty) - editingBalance.qty).toLocaleString()} pcs (Reduction)
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Adjustment Reason */}
+              <div>
+                <label className="block text-xs font-semibold text-[#42566c] mb-1">
+                  Adjustment Reason *
+                </label>
+                <select
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-xs bg-white text-[#18324d] font-medium"
+                >
+                  <option value="Location Transfer / Bin Relocation">Location Transfer / Bin Relocation</option>
+                  <option value="Cycle Count / Physical Stocktake">Cycle Count / Physical Stocktake</option>
+                  <option value="Zero Out / Clear Stock (Reset to 0)">Zero Out / Clear Stock (Reset to 0)</option>
+                  <option value="Damaged / Scrap Write-Off">Damaged / Scrap Write-Off</option>
+                  <option value="Receiving Count Discrepancy Correction">Receiving Count Discrepancy Correction</option>
+                  <option value="Found Stock / Location Reconciliation">Found Stock / Location Reconciliation</option>
+                  <option value="Engineering / Sample Extraction">Engineering / Sample Extraction</option>
+                  <option value="Data Correction">Data Correction</option>
+                  <option value="Other Reason">Other Reason (Specify below)</option>
+                </select>
+                {reason === "Other Reason" && (
+                  <input
+                    type="text"
+                    value={customReason}
+                    onChange={(e) => setCustomReason(e.target.value)}
+                    required
+                    placeholder="Specify audit reason..."
+                    className="w-full mt-2 px-3 py-1.5 border border-[#cfd9e4] rounded-xl text-xs"
+                  />
+                )}
+              </div>
+
+              {/* ADMIN PASSWORD VERIFICATION SECTION */}
+              <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-4 space-y-2">
+                <div className="flex items-center gap-1.5">
+                  <Lock size={14} className="text-amber-800" />
+                  <label className="block text-xs font-bold text-amber-950">
+                    Administrator Password Verification *
+                  </label>
+                </div>
+                <p className="text-[11px] text-amber-800">
+                  Enter an Administrator password to authenticate and authorize this stock change.
+                </p>
+
+                <div className="relative mt-1">
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    value={adminPassword}
+                    onChange={(e) => {
+                      setAdminPassword(e.target.value);
+                      setPasswordError(null);
+                    }}
+                    required
+                    placeholder="Enter admin password..."
+                    className="w-full pl-3 pr-10 py-2 border border-amber-300 rounded-xl text-sm font-mono bg-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600"
+                  >
+                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+                <div className="text-[10px] text-amber-900/80 flex items-center justify-between pt-0.5">
+                  {currentUser?.role === "Admin" ? (
+                    <span>Logged in as Admin: <strong>@{currentUser.username}</strong></span>
+                  ) : (
+                    <span>Admin sign-off required (default: <code>password123</code>)</span>
+                  )}
+                  {!adminPassword && (
+                    <button
+                      type="button"
+                      onClick={() => setAdminPassword(currentUser?.password || "password123")}
+                      className="text-amber-800 hover:text-amber-950 font-semibold underline cursor-pointer"
+                    >
+                      Use default password
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#dfe6ee]">
+                <button
+                  type="button"
+                  onClick={handleCloseEdit}
+                  className="px-4 py-2 border border-[#cfd9e4] rounded-xl text-xs font-semibold text-[#18324d] hover:bg-[#f7f9fc] transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!adminPassword.trim() || newQty === "" || Number(newQty) < 0 || !newLoc.trim()}
+                  className={`px-5 py-2 rounded-xl text-xs font-semibold shadow-xs transition flex items-center gap-1.5 ${
+                    !adminPassword.trim() || newQty === "" || Number(newQty) < 0 || !newLoc.trim()
+                      ? "bg-gray-200 text-gray-500 cursor-not-allowed"
+                      : "bg-[#2463a6] text-white hover:bg-[#1d4f85] cursor-pointer"
+                  }`}
+                >
+                  <Lock size={13} />
+                  Authorize & Save Changes
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* DOWNLOAD BY MODEL MODAL */}
+      {isDownloadModelModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl max-w-2xl w-full shadow-2xl border border-[#dfe6ee] flex flex-col max-h-[90vh] overflow-hidden animate-in fade-in zoom-in duration-150">
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-[#dfe6ee] flex items-center justify-between bg-gradient-to-r from-blue-50/50 to-indigo-50/50">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-[#2463a6]/10 text-[#2463a6] flex items-center justify-center">
+                  <Layers size={20} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-[#18324d]">
+                    Download Inventory Balance by Model
+                  </h3>
+                  <p className="text-xs text-[#65768a]">
+                    Select a specific model or download a multi-sheet workbook for all models
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsDownloadModelModalOpen(false)}
+                className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-6 overflow-y-auto space-y-4">
+              <div className="text-xs text-[#42566c]">
+                Choose which model to export. You can export directly into{" "}
+                <strong className="text-[#18324d]">Microsoft Excel (.xlsx)</strong> or raw{" "}
+                <strong className="text-[#18324d]">CSV</strong> format.
+              </div>
+
+              {/* Options */}
+              <div className="space-y-2">
+                {/* All Models Option */}
+                <div
+                  onClick={() => setModelDownloadChoice("All")}
+                  className={`p-3.5 rounded-xl border-2 transition cursor-pointer flex items-center justify-between gap-3 ${
+                    modelDownloadChoice === "All"
+                      ? "border-[#2463a6] bg-blue-50/60 shadow-xs"
+                      : "border-[#dfe6ee] hover:border-gray-300 hover:bg-[#f7f9fc]"
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="radio"
+                      name="modelChoice"
+                      checked={modelDownloadChoice === "All"}
+                      onChange={() => setModelDownloadChoice("All")}
+                      className="text-[#2463a6] focus:ring-[#2463a6] cursor-pointer"
+                    />
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-sm text-[#18324d]">All Models</span>
+                        <span className="px-2 py-0.5 bg-blue-100 text-blue-800 text-[10px] font-semibold rounded-full">
+                          Multi-Sheet Excel Workbook
+                        </span>
+                      </div>
+                      <p className="text-xs text-[#65768a] mt-0.5">
+                        Creates Master sheet + Summary by Model + dedicated tab for every vehicle model
+                      </p>
+                    </div>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <span className="text-xs font-bold text-[#18324d]">
+                      {allRows.length} records
+                    </span>
+                    <span className="block text-[11px] text-[#65768a]">
+                      {availableModels.length} models
+                    </span>
+                  </div>
+                </div>
+
+                {/* Individual Model Cards */}
+                <div className="pt-2">
+                  <div className="text-[11px] font-bold text-[#65768a] uppercase tracking-wider mb-2">
+                    Or select an individual model ({availableModels.length}):
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-y-auto pr-1">
+                    {availableModels.map((m) => {
+                      const stats = modelStats[m] || { count: 0, totalUnits: 0, lowStock: 0 };
+                      const isSelected = modelDownloadChoice.toLowerCase() === m.toLowerCase();
+                      return (
+                        <div
+                          key={m}
+                          onClick={() => setModelDownloadChoice(m)}
+                          className={`p-3 rounded-xl border transition cursor-pointer flex items-center justify-between gap-2 ${
+                            isSelected
+                              ? "border-[#2463a6] bg-blue-50/70 ring-1 ring-[#2463a6]"
+                              : "border-[#dfe6ee] hover:border-gray-300 hover:bg-[#f7f9fc]"
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <input
+                              type="radio"
+                              name="modelChoice"
+                              checked={isSelected}
+                              onChange={() => setModelDownloadChoice(m)}
+                              className="text-[#2463a6] focus:ring-[#2463a6] cursor-pointer shrink-0"
+                            />
+                            <div className="truncate">
+                              <span className="font-bold text-xs text-[#18324d] truncate block">
+                                {m}
+                              </span>
+                              <span className="text-[11px] text-[#65768a]">
+                                {stats.count} parts • {stats.totalUnits.toLocaleString()} units
+                              </span>
+                            </div>
+                          </div>
+                          {stats.lowStock > 0 && (
+                            <span className="shrink-0 text-[10px] font-semibold px-1.5 py-0.5 bg-amber-50 text-amber-800 border border-amber-200 rounded-md">
+                              {stats.lowStock} low
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {/* Selected summary */}
+              <div className="p-3 bg-gray-50 border border-gray-200 rounded-xl text-xs flex items-center justify-between">
+                <span className="text-gray-600">
+                  Target:{" "}
+                  <strong className="text-[#18324d] font-bold">
+                    {modelDownloadChoice === "All"
+                      ? "All Models (All Parts)"
+                      : `Model "${modelDownloadChoice}"`}
+                  </strong>
+                </span>
+                <span className="text-gray-500 font-medium">
+                  {modelDownloadChoice === "All"
+                    ? `${allRows.length} total rows`
+                    : `${allRows.filter((r) => r.model.toLowerCase() === modelDownloadChoice.toLowerCase()).length} matching rows`}
+                </span>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 py-4 border-t border-[#dfe6ee] bg-[#f7f9fc] flex flex-wrap items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => setIsDownloadModelModalOpen(false)}
+                className="px-4 py-2 border border-[#cfd9e4] rounded-xl text-xs font-semibold text-[#18324d] hover:bg-white transition cursor-pointer"
+              >
+                Close
+              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleDownloadByModel(modelDownloadChoice, "csv");
+                    setIsDownloadModelModalOpen(false);
+                  }}
+                  className="flex items-center gap-1.5 px-3.5 py-2 bg-white hover:bg-gray-100 border border-[#cfd9e4] text-[#18324d] rounded-xl text-xs font-semibold shadow-2xs transition cursor-pointer"
+                >
+                  <Download size={14} />
+                  <span>Download CSV</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleDownloadByModel(modelDownloadChoice, "xlsx");
+                    setIsDownloadModelModalOpen(false);
+                  }}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-xs transition cursor-pointer"
+                >
+                  <FileSpreadsheet size={14} />
+                  <span>Download Excel (.xlsx)</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

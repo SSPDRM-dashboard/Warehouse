@@ -188,6 +188,16 @@ export type Transaction = {
   finishedGoodModule?: "IP" | "Center Console" | "Door Trim" | "Cooling Module" | string;
   trolleyNo?: string;
   model?: string;
+  variant?: string;
+  doNo?: string;
+  pic?: string;
+  doItems?: {
+    bil: number;
+    code: string;
+    desc: string;
+    qty: number;
+    module?: string;
+  }[];
   notes?: string;
 }
 

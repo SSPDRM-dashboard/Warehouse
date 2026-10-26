@@ -54,6 +54,7 @@ export interface VADOLineItem {
   bil: number;
   code: string;
   desc: string;
+  model?: string;
   module: FGModuleKey;
   qty: number;
   defaultQty?: number;
@@ -64,6 +65,7 @@ export const PHOTO_DO_ITEMS: VADOLineItem[] = [
     bil: 1,
     code: "5305MA170001AZJL",
     desc: "CONSOLE SUB-ASSY (Local)",
+    model: "G9",
     module: "Center Console",
     qty: 10,
     defaultQty: 10,
@@ -72,6 +74,7 @@ export const PHOTO_DO_ITEMS: VADOLineItem[] = [
     bil: 2,
     code: "6102MA170001BZJL",
     desc: "TRIM PANEL SUB-ASSY, LH FR DOOR, INR (Local)",
+    model: "G9",
     module: "Door Trim",
     qty: 10,
     defaultQty: 10,
@@ -80,6 +83,7 @@ export const PHOTO_DO_ITEMS: VADOLineItem[] = [
     bil: 3,
     code: "6102MA170002AZJL",
     desc: "TRIM PANEL SUB-ASSY, RH FR DOOR, INR (Local)",
+    model: "G9",
     module: "Door Trim",
     qty: 10,
     defaultQty: 10,
@@ -88,6 +92,7 @@ export const PHOTO_DO_ITEMS: VADOLineItem[] = [
     bil: 4,
     code: "6202MA220001AZJL",
     desc: "TRIM PANEL SUB-ASSY, LH RR DOOR, INR (Local)",
+    model: "G9",
     module: "Door Trim",
     qty: 10,
     defaultQty: 10,
@@ -96,6 +101,7 @@ export const PHOTO_DO_ITEMS: VADOLineItem[] = [
     bil: 5,
     code: "6202MA220002AZJL",
     desc: "TRIM PANEL SUB-ASSY, RH RR DOOR, INR (Local)",
+    model: "G9",
     module: "Door Trim",
     qty: 10,
     defaultQty: 10,
@@ -104,6 +110,7 @@ export const PHOTO_DO_ITEMS: VADOLineItem[] = [
     bil: 6,
     code: "5306MA170011A8P",
     desc: "IP SUB ASSY (Local)",
+    model: "G9",
     module: "IP",
     qty: 0,
     defaultQty: 0,
@@ -112,6 +119,7 @@ export const PHOTO_DO_ITEMS: VADOLineItem[] = [
     bil: 7,
     code: "1301MA220001A",
     desc: "COOLING MODULE SUB-ASSY (Local)",
+    model: "G9",
     module: "Cooling Module",
     qty: 12,
     defaultQty: 12,
@@ -265,9 +273,7 @@ export function SendToVAView({
   );
 
   // Line items for the Delivery Order (Initialized from photo)
-  const [doItems, setDoItems] = useState<
-    { bil: number; code: string; desc: string; qty: number; module: FGModuleKey }[]
-  >(PHOTO_DO_ITEMS);
+  const [doItems, setDoItems] = useState<VADOLineItem[]>(PHOTO_DO_ITEMS);
 
   // Total quantity calculation for the current DO form
   const totalDOQuantity = useMemo(() => {
@@ -423,6 +429,7 @@ export function SendToVAView({
         bil: prev.length + 1,
         code: "",
         desc: "",
+        model: vehicleModel || "G9",
         qty: 10,
         module: "Custom",
         defaultQty: 10,
@@ -462,6 +469,7 @@ export function SendToVAView({
         ...next[idx],
         code: upper,
         desc: matchedItem ? (matchedItem.desc || next[idx].desc) : next[idx].desc,
+        model: matchedItem ? matchedItem.model : (next[idx].model || vehicleModel || "G9"),
         module: detectedModule,
       };
       return next;
@@ -984,6 +992,7 @@ export function SendToVAView({
                 <th className="p-2.5 text-center w-12">BIL.</th>
                 <th className="p-2.5">PART NUMBER</th>
                 <th className="p-2.5">DESCRIPTION</th>
+                <th className="p-2.5">MODEL</th>
                 <th className="p-2.5">MODULE</th>
                 <th className="p-2.5 text-center">STANDARD DO QTY</th>
                 <th className="p-2.5 text-right">CURRENT STOCK ON-HAND</th>
@@ -992,11 +1001,17 @@ export function SendToVAView({
             <tbody className="divide-y divide-[#e9eef3]">
               {PHOTO_DO_ITEMS.map((item) => {
                 const stock = fgStockMap.get(item.code) || 0;
+                const modelVal = item.model || items.find((it) => it.code === item.code)?.model || "G9";
                 return (
                   <tr key={item.bil} className="hover:bg-slate-50/70 transition">
                     <td className="p-2.5 text-center font-bold text-[#18324d]">{item.bil}</td>
                     <td className="p-2.5 font-mono font-bold text-[#18324d]">{item.code}</td>
                     <td className="p-2.5 font-medium text-slate-800">{item.desc}</td>
+                    <td className="p-2.5 whitespace-nowrap">
+                      <span className="px-2 py-0.5 bg-blue-50 text-blue-900 rounded font-bold font-mono text-[11px] border border-blue-200">
+                        {modelVal}
+                      </span>
+                    </td>
                     <td className="p-2.5">
                       <span className="px-2 py-0.5 bg-blue-50 text-blue-800 rounded font-semibold text-[10px] border border-blue-100">
                         {item.module}
@@ -1022,7 +1037,7 @@ export function SendToVAView({
             </tbody>
             <tfoot>
               <tr className="bg-[#f0f4f9] font-bold text-xs border-t border-[#dfe6ee]">
-                <td colSpan={4} className="p-2.5 text-right text-[#18324d]">
+                <td colSpan={5} className="p-2.5 text-right text-[#18324d]">
                   TOTAL STANDARD QUANTITY:
                 </td>
                 <td className="p-2.5 text-center font-mono font-extrabold text-[#18324d] text-sm">
@@ -1523,6 +1538,7 @@ export function SendToVAView({
                         <th className="p-2.5 text-center w-14">BIL.</th>
                         <th className="p-2.5 w-56">PART NUMBER</th>
                         <th className="p-2.5">DESCRIPTION</th>
+                        <th className="p-2.5 w-28">MODEL</th>
                         <th className="p-2.5 w-36">MODULE</th>
                         <th className="p-2.5 text-center w-28">QUANTITY</th>
                         <th className="p-2.5 text-center w-12">ACTION</th>
@@ -1531,7 +1547,7 @@ export function SendToVAView({
                     <tbody className="divide-y divide-[#dfe6ee]">
                       {doItems.length === 0 ? (
                         <tr>
-                          <td colSpan={6} className="text-center py-8 text-gray-500 bg-gray-50/50">
+                          <td colSpan={7} className="text-center py-8 text-gray-500 bg-gray-50/50">
                             <div className="space-y-2">
                               <p className="font-semibold text-gray-600">No line items in this Delivery Order yet.</p>
                               <div className="flex items-center justify-center gap-2">
@@ -1609,6 +1625,21 @@ export function SendToVAView({
                                 }}
                                 placeholder="e.g. CONSOLE SUB-ASSY (Local)"
                                 className="w-full px-2.5 py-1.5 border border-gray-300 focus:border-[#2463a6] rounded text-[#18324d] font-medium bg-white text-xs focus:outline-none focus:ring-1 focus:ring-[#2463a6]"
+                              />
+                            </td>
+
+                            {/* MODEL (Editable input) */}
+                            <td className="p-2">
+                              <input
+                                type="text"
+                                value={item.model !== undefined ? item.model : (items.find((it) => it.code === item.code)?.model || vehicleModel || "G9")}
+                                onChange={(e) => {
+                                  const next = [...doItems];
+                                  next[idx].model = e.target.value;
+                                  setDoItems(next);
+                                }}
+                                placeholder="e.g. G9"
+                                className="w-24 px-2 py-1.5 border border-gray-300 focus:border-[#2463a6] rounded font-mono font-bold text-[#18324d] bg-white text-xs focus:outline-none focus:ring-1 focus:ring-[#2463a6]"
                               />
                             </td>
 
@@ -1900,6 +1931,7 @@ export function SendToVAView({
                         PART NUMBER
                       </th>
                       <th className="border-r border-black py-1.5 px-3 text-center">DESCRIPTION</th>
+                      <th className="border-r border-black py-1.5 px-2 text-center w-24">MODEL</th>
                       <th className="py-1.5 px-3 text-center w-20">QTY</th>
                     </tr>
                   </thead>
@@ -1915,6 +1947,9 @@ export function SendToVAView({
                         </td>
                         <td className="border-r border-black py-1 px-3 uppercase text-center font-medium">
                           {itm.desc}
+                        </td>
+                        <td className="border-r border-black py-1 px-2 font-mono font-bold text-center">
+                          {itm.model || viewingSlipTx.model || "G9"}
                         </td>
                         <td className="py-1 px-3 text-center font-mono font-bold">{itm.qty}</td>
                       </tr>

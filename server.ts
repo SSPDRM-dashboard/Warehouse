@@ -11,7 +11,20 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 async function startServer() {
   const app = express();
-  app.use(express.json());
+  // Configure request body limit to 50mb to prevent PayloadTooLargeError with large inventories
+  app.use(express.json({ limit: "50mb" }));
+  app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+
+  // Payload & parsing error handling middleware
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (err && (err.type === "entity.too.large" || err.status === 413)) {
+      console.warn("PayloadTooLargeError intercepted:", err.message);
+      return res.status(413).json({
+        error: "Request payload too large. The request size exceeded allowed limits.",
+      });
+    }
+    next(err);
+  });
 
   // Initialize Gemini AI client for server-side use
   const ai = new GoogleGenAI({
@@ -32,11 +45,44 @@ async function startServer() {
         return res.status(400).json({ error: "Missing items or balances data" });
       }
 
+      // Compact payload data for Gemini prompt to avoid token blowout
+      const compactItems = (items || []).slice(0, 150).map((i: any) => ({
+        code: i.code,
+        desc: i.desc,
+        model: i.model,
+        min: i.min,
+      }));
+
+      // Calculate total stock per item code
+      const stockMap: Record<string, number> = {};
+      for (const b of balances || []) {
+        stockMap[b.code] = (stockMap[b.code] || 0) + (Number(b.qty) || 0);
+      }
+
+      // Identify low-stock items
+      const lowStockList = compactItems
+        .filter((i: any) => (stockMap[i.code] ?? 0) <= (i.min ?? 10))
+        .map((i: any) => ({
+          code: i.code,
+          desc: i.desc,
+          min: i.min,
+          currentStock: stockMap[i.code] ?? 0,
+        }));
+
+      const compactRecentTx = (transactions || []).slice(0, 15).map((t: any) => ({
+        type: t.type,
+        code: t.code,
+        qty: t.qty,
+        dest: t.dest,
+        time: t.time,
+      }));
+
       const prompt = `You are an expert AI Supply Chain & Warehouse Logistics Consultant for Warehouse OS.
 Analyze the following warehouse inventory data and provide strategic insights:
-- Items: ${JSON.stringify(items)}
-- Balances: ${JSON.stringify(balances)}
-- Recent Transactions: ${JSON.stringify((transactions || []).slice(0, 10))}
+- Total registered parts: ${(items || []).length}
+- Low stock items (${lowStockList.length}): ${JSON.stringify(lowStockList.slice(0, 30))}
+- Sample parts summary: ${JSON.stringify(compactItems.slice(0, 40))}
+- Recent movements (last 15): ${JSON.stringify(compactRecentTx)}
 
 Please provide a JSON response with:
 1. "riskSummary": A concise paragraph assessing current stock health, turnover rate, and potential stockout bottlenecks.
@@ -49,7 +95,8 @@ Please provide a JSON response with:
         contents: prompt,
         config: {
           responseMimeType: "application/json",
-          systemInstruction: "You are a professional warehouse inventory intelligence engine. Always respond in valid JSON format matching the requested structure.",
+          systemInstruction:
+            "You are a professional warehouse inventory intelligence engine. Always respond in valid JSON format matching the requested structure.",
         },
       });
 

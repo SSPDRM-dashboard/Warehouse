@@ -860,6 +860,7 @@ export function UnpackingView({
               <thead className="bg-[#f4f7fb] text-[#42566c] uppercase text-[10px] font-bold tracking-wider border-b border-[#dfe6ee]">
                 <tr>
                   <th className="py-3 px-3">Unpack ID</th>
+                  <th className="py-3 px-3">Model</th>
                   <th className="py-3 px-3">Part Details</th>
                   <th className="py-3 px-3">Qty Breakdown</th>
                   <th className="py-3 px-3">Locations Flow</th>
@@ -871,7 +872,7 @@ export function UnpackingView({
               <tbody className="divide-y divide-[#dfe6ee]">
                 {filteredRecords.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="text-center py-8 text-[#65768a]">
+                    <td colSpan={8} className="text-center py-8 text-[#65768a]">
                       No records match your filter criteria.
                     </td>
                   </tr>
@@ -886,10 +887,14 @@ export function UnpackingView({
                           </div>
                         )}
                       </td>
+                      <td className="py-3 px-3 whitespace-nowrap">
+                        <span className="px-2 py-0.5 bg-blue-50 text-blue-900 border border-blue-200 rounded text-[11px] font-bold font-mono">
+                          {r.model || "—"}
+                        </span>
+                      </td>
                       <td className="py-3 px-3">
                         <div className="font-mono font-bold text-[#18324d]">{r.code}</div>
                         <div className="text-[#65768a] text-[11px] line-clamp-1">{r.desc}</div>
-                        <div className="text-[10px] text-[#8292a4]">Model: {r.model}</div>
                       </td>
                       <td className="py-3 px-3 font-mono">
                         <div>

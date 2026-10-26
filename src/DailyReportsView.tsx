@@ -124,9 +124,10 @@ export function DailyReportsView({
   const [activeReportTab, setActiveReportTab] = useState<"all" | "incoming" | "unpacking" | "prod1">("all");
   const [searchQuery, setSearchQuery] = useState("");
 
-  const getItemModel = (code: string) => {
+  const getItemModel = (code: string, t?: Transaction) => {
+    if (t?.model && t.model.trim()) return t.model.trim();
     const item = items.find((i) => i.code.trim().toUpperCase() === code.trim().toUpperCase());
-    return item ? item.model : "—";
+    return item?.model || "—";
   };
 
   // Check if transaction matches the selected date
@@ -226,7 +227,7 @@ export function DailyReportsView({
       t.caseNo || "—",
       t.containerNo || "—",
       t.batchNo || "—",
-      getItemModel(t.code),
+      getItemModel(t.code, t),
       t.qty,
       t.dest,
       t.ref,
@@ -267,7 +268,7 @@ export function DailyReportsView({
       t.code,
       t.partName || t.desc || "",
       t.batchNo || "—",
-      getItemModel(t.code),
+      getItemModel(t.code, t),
       t.qty,
       t.dest,
       t.ref,
@@ -309,7 +310,7 @@ export function DailyReportsView({
       t.code,
       t.partName || t.desc || "",
       t.batchNo || "—",
-      getItemModel(t.code),
+      getItemModel(t.code, t),
       t.qty,
       t.source,
       t.dest,
@@ -348,6 +349,8 @@ export function DailyReportsView({
         t.code.toLowerCase().includes(q) ||
         (t.partName && t.partName.toLowerCase().includes(q)) ||
         (t.desc && t.desc.toLowerCase().includes(q)) ||
+        (t.model && t.model.toLowerCase().includes(q)) ||
+        (getItemModel(t.code, t) && getItemModel(t.code, t).toLowerCase().includes(q)) ||
         (t.caseNo && t.caseNo.toLowerCase().includes(q)) ||
         (t.batchNo && t.batchNo.toLowerCase().includes(q)) ||
         (t.containerNo && t.containerNo.toLowerCase().includes(q)) ||
@@ -720,13 +723,14 @@ export function DailyReportsView({
             )}
 
             <div className="overflow-x-auto border border-[#dfe6ee] rounded-xl">
-              <table className="w-full text-left border-collapse min-w-[1000px]">
+              <table className="w-full text-left border-collapse min-w-[1050px]">
                 <thead>
                   <tr className="bg-[#f7f9fc] text-[#5c6f83] text-xs font-bold border-b border-[#dfe6ee]">
                     <th className="p-3">Tx ID</th>
                     <th className="p-3">Time</th>
                     <th className="p-3">Part No</th>
                     <th className="p-3">Part Name</th>
+                    <th className="p-3">Model</th>
                     <th className="p-3 bg-blue-50/70 text-blue-900 font-bold">Case No</th>
                     <th className="p-3">Container No</th>
                     <th className="p-3">Batch No</th>
@@ -741,7 +745,7 @@ export function DailyReportsView({
                 <tbody className="divide-y divide-[#e9eef3] text-xs">
                   {applySearch(displayedIncomingTx).length === 0 ? (
                     <tr>
-                      <td colSpan={13} className="text-center py-8 text-[#65768a]">
+                      <td colSpan={14} className="text-center py-8 text-[#65768a]">
                         <div className="max-w-md mx-auto space-y-2">
                           <p className="font-semibold text-sm text-[#18324d]">
                             No incoming receipts recorded for {selectedDate === "all" ? "the system" : selectedDate}.
@@ -769,6 +773,22 @@ export function DailyReportsView({
                         <td className="p-3 font-mono font-bold text-[#18324d]">{t.code}</td>
                         <td className="p-3 font-medium text-[#18324d] max-w-[180px] truncate" title={t.partName || t.desc}>
                           {t.partName || t.desc || "—"}
+                        </td>
+                        <td className="p-3 whitespace-nowrap">
+                          {getItemModel(t.code, t) !== "—" ? (
+                            <div className="flex items-center gap-1">
+                              <span className="px-2 py-0.5 bg-blue-50 text-blue-900 border border-blue-200 rounded text-[11px] font-bold font-mono">
+                                {getItemModel(t.code, t)}
+                              </span>
+                              {t.variant && (
+                                <span className="px-1.5 py-0.2 bg-gray-100 text-gray-700 text-[10px] font-mono rounded border border-gray-200">
+                                  {t.variant}
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-[#a0aec0] text-xs">—</span>
+                          )}
                         </td>
                         <td className="p-3 font-mono">
                           {t.caseNo && t.caseNo !== "—" ? (
@@ -837,13 +857,14 @@ export function DailyReportsView({
             </div>
 
             <div className="overflow-x-auto border border-[#dfe6ee] rounded-xl">
-              <table className="w-full text-left border-collapse min-w-[950px]">
+              <table className="w-full text-left border-collapse min-w-[1000px]">
                 <thead>
                   <tr className="bg-[#f7f9fc] text-[#5c6f83] text-xs font-bold border-b border-[#dfe6ee]">
                     <th className="p-3">Unpack ID</th>
                     <th className="p-3">Time</th>
                     <th className="p-3">Part No</th>
                     <th className="p-3">Part Name</th>
+                    <th className="p-3">Model</th>
                     <th className="p-3">Batch No</th>
                     <th className="p-3">Qty Unpacked</th>
                     <th className="p-3">Storage Bin</th>
@@ -856,7 +877,7 @@ export function DailyReportsView({
                 <tbody className="divide-y divide-[#e9eef3] text-xs">
                   {applySearch(unpackingTx).length === 0 ? (
                     <tr>
-                      <td colSpan={11} className="text-center py-6 text-[#65768a]">
+                      <td colSpan={12} className="text-center py-6 text-[#65768a]">
                         No unpacking records recorded for {selectedDate === "all" ? "the system" : selectedDate}.
                       </td>
                     </tr>
@@ -868,6 +889,22 @@ export function DailyReportsView({
                         <td className="p-3 font-mono font-bold text-[#18324d]">{t.code}</td>
                         <td className="p-3 font-medium text-[#18324d] max-w-[180px] truncate" title={t.partName || t.desc}>
                           {t.partName || t.desc || "—"}
+                        </td>
+                        <td className="p-3 whitespace-nowrap">
+                          {getItemModel(t.code, t) !== "—" ? (
+                            <div className="flex items-center gap-1">
+                              <span className="px-2 py-0.5 bg-blue-50 text-blue-900 border border-blue-200 rounded text-[11px] font-bold font-mono">
+                                {getItemModel(t.code, t)}
+                              </span>
+                              {t.variant && (
+                                <span className="px-1.5 py-0.2 bg-gray-100 text-gray-700 text-[10px] font-mono rounded border border-gray-200">
+                                  {t.variant}
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-[#a0aec0] text-xs">—</span>
+                          )}
                         </td>
                         <td className="p-3 font-mono">
                           {t.batchNo ? (
@@ -918,13 +955,14 @@ export function DailyReportsView({
             </div>
 
             <div className="overflow-x-auto border border-[#dfe6ee] rounded-xl">
-              <table className="w-full text-left border-collapse min-w-[950px]">
+              <table className="w-full text-left border-collapse min-w-[1000px]">
                 <thead>
                   <tr className="bg-[#f7f9fc] text-[#5c6f83] text-xs font-bold border-b border-[#dfe6ee]">
                     <th className="p-3">Issue Voucher</th>
                     <th className="p-3">Time</th>
                     <th className="p-3">Part No</th>
                     <th className="p-3">Part Name</th>
+                    <th className="p-3">Model</th>
                     <th className="p-3">Batch No</th>
                     <th className="p-3">Quantity Sent</th>
                     <th className="p-3">Source Bin</th>
@@ -937,7 +975,7 @@ export function DailyReportsView({
                 <tbody className="divide-y divide-[#e9eef3] text-xs">
                   {applySearch(prod1Tx).length === 0 ? (
                     <tr>
-                      <td colSpan={11} className="text-center py-6 text-[#65768a]">
+                      <td colSpan={12} className="text-center py-6 text-[#65768a]">
                         No parts issued to Production Line 1 for {selectedDate === "all" ? "the system" : selectedDate}.
                       </td>
                     </tr>
@@ -949,6 +987,22 @@ export function DailyReportsView({
                         <td className="p-3 font-mono font-bold text-[#18324d]">{t.code}</td>
                         <td className="p-3 font-medium text-[#18324d] max-w-[180px] truncate" title={t.partName || t.desc}>
                           {t.partName || t.desc || "—"}
+                        </td>
+                        <td className="p-3 whitespace-nowrap">
+                          {getItemModel(t.code, t) !== "—" ? (
+                            <div className="flex items-center gap-1">
+                              <span className="px-2 py-0.5 bg-blue-50 text-blue-900 border border-blue-200 rounded text-[11px] font-bold font-mono">
+                                {getItemModel(t.code, t)}
+                              </span>
+                              {t.variant && (
+                                <span className="px-1.5 py-0.2 bg-gray-100 text-gray-700 text-[10px] font-mono rounded border border-gray-200">
+                                  {t.variant}
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-[#a0aec0] text-xs">—</span>
+                          )}
                         </td>
                         <td className="p-3 font-mono">
                           {t.batchNo ? (

@@ -182,6 +182,11 @@ export type Transaction = {
   unpackedByName?: string; // Person/Operator who unpacked the shipment
   unpacked?: boolean; // Whether goods have been unpacked & verified
   unpackDate?: string; // Date of unpacking
+  issued?: boolean; // Whether goods have been issued to production line
+  issuedQty?: number; // Quantity issued to production line
+  issuedAt?: string; // Timestamp when issued
+  issuedDest?: string; // Production destination line
+  issuedRef?: string; // Issue transaction ID reference
   time: string;
   status: "Posted" | "Pending" | "Cancelled";
   confirmedFromKittingCase?: boolean;
@@ -195,6 +200,7 @@ export type Transaction = {
     bil: number;
     code: string;
     desc: string;
+    model?: string;
     qty: number;
     module?: string;
   }[];

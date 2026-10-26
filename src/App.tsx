@@ -6700,8 +6700,24 @@ function HistoryView({
             onClick={() =>
               downloadCSV(
                 "warehouse_transactions.csv",
-                ["Transaction No", "Type", "Part No", "Part Name", "Batch No", "Quantity", "Source", "Destination", "Reference", "Receiver / Operator Name", "System User", "Time", "Status"],
-                transactions.map((t) => [t.id, t.type, t.code, t.partName || t.desc || "", t.batchNo || "—", t.qty, t.source, t.dest, t.ref, t.receiverName || t.user, t.user, t.time, t.status])
+                ["Transaction No", "Type", "Part No", "Part Name", "Model", "Variant", "Batch No", "Quantity", "Source", "Destination", "Reference", "Receiver / Operator Name", "System User", "Time", "Status"],
+                transactions.map((t) => [
+                  t.id,
+                  t.type,
+                  t.code,
+                  t.partName || t.desc || "",
+                  t.model || items.find((i) => i.code.toUpperCase() === t.code.toUpperCase())?.model || "—",
+                  t.variant || "—",
+                  t.batchNo || "—",
+                  t.qty,
+                  t.source,
+                  t.dest,
+                  t.ref,
+                  t.receiverName || t.user,
+                  t.user,
+                  t.time,
+                  t.status,
+                ])
               )
             }
             className="flex items-center gap-2 px-3 py-2 bg-white border border-[#cfd9e4] rounded-xl text-xs font-semibold text-[#18324d] hover:bg-[#f7f9fc]"
@@ -6719,7 +6735,7 @@ function HistoryView({
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search transaction ID, part no, part name, batch no, reference, user..."
+              placeholder="Search transaction ID, part no, part name, model, batch no, reference, user..."
               className="w-full pl-10 pr-4 py-2.5 border border-[#cfd9e4] rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#2463a6]"
             />
           </div>
@@ -6738,7 +6754,7 @@ function HistoryView({
           </select>
         </div>
 
-        <TxTable transactions={filtered} canManage={canManage} onDelete={setDeleteTxId} />
+        <TxTable transactions={filtered} items={items} canManage={canManage} onDelete={setDeleteTxId} />
       </div>
 
       {deleteTxId && (
@@ -6800,10 +6816,12 @@ function HistoryView({
 
 function TxTable({
   transactions,
+  items,
   canManage,
   onDelete,
 }: {
   transactions: Transaction[];
+  items?: Item[];
   canManage?: boolean;
   onDelete?: (id: string) => void;
 }) {
@@ -6813,13 +6831,14 @@ function TxTable({
 
   return (
     <div className="overflow-x-auto border border-[#dfe6ee] rounded-xl">
-      <table className="w-full text-left border-collapse min-w-[950px]">
+      <table className="w-full text-left border-collapse min-w-[1000px]">
         <thead>
           <tr className="bg-[#f7f9fc] text-[#5c6f83] text-xs font-bold border-b border-[#dfe6ee]">
             <th className="p-3">Transaction No.</th>
             <th className="p-3">Type</th>
             <th className="p-3">Part No</th>
             <th className="p-3">Part Name</th>
+            <th className="p-3">Model & Variant</th>
             <th className="p-3">Batch No</th>
             <th className="p-3">Quantity</th>
             <th className="p-3">Source</th>
@@ -6834,6 +6853,9 @@ function TxTable({
         <tbody className="divide-y divide-[#e9eef3] text-xs">
           {transactions.map((t) => {
             const isIssue = t.type === "Production Issue";
+            const itemModel =
+              t.model ||
+              items?.find((i) => i.code.trim().toUpperCase() === t.code.trim().toUpperCase())?.model;
             return (
               <tr key={t.id} className="hover:bg-[#fcfdfd]">
                 <td className="p-3 font-bold font-mono text-[#18324d]">{t.id}</td>
@@ -6849,6 +6871,22 @@ function TxTable({
                 <td className="p-3 font-bold font-mono text-[#18324d]">{t.code}</td>
                 <td className="p-3 font-medium text-[#18324d] max-w-[200px]">
                   <div className="truncate" title={t.partName || t.desc}>{t.partName || t.desc || "—"}</div>
+                </td>
+                <td className="p-3 whitespace-nowrap">
+                  {itemModel ? (
+                    <div className="flex items-center gap-1">
+                      <span className="px-2 py-0.5 bg-blue-50 text-blue-900 border border-blue-200 rounded text-[11px] font-bold font-mono">
+                        {itemModel}
+                      </span>
+                      {t.variant && (
+                        <span className="px-1.5 py-0.2 bg-gray-100 text-gray-700 text-[10px] font-mono rounded border border-gray-200">
+                          {t.variant}
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    <span className="text-gray-400 text-xs">—</span>
+                  )}
                 </td>
                 <td className="p-3 font-mono">
                   <div className="space-y-0.5">
@@ -6905,7 +6943,7 @@ function TxTable({
                   <td className="p-3">
                     <button
                       onClick={() => onDelete(t.id)}
-                      className="px-2.5 py-1 bg-red-50 text-red-700 border border-red-200 rounded-lg text-[11px] font-semibold hover:bg-red-100"
+                      className="px-2.5 py-1 bg-red-50 text-red-700 border border-red-200 rounded-lg text-[11px] font-semibold hover:bg-red-100 cursor-pointer"
                     >
                       Delete
                     </button>

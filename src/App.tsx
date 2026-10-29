@@ -6276,10 +6276,11 @@ function InventoryView({
   const [search, setSearch] = useState("");
   const [notice, setNotice] = useState<{ msg: string; type: "success" | "error" } | null>(null);
 
-  // Edit Quantity & Location with Admin Password state
+  // Edit Quantity, Location & Batch with Admin Password state
   const [editingBalance, setEditingBalance] = useState<Balance | null>(null);
   const [newQty, setNewQty] = useState<number | "">("");
   const [newLoc, setNewLoc] = useState("");
+  const [newBatchNo, setNewBatchNo] = useState("");
   const [adminPassword, setAdminPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [reason, setReason] = useState("Cycle Count / Physical Stocktake");
@@ -6309,6 +6310,8 @@ function InventoryView({
   const [batchModalModel, setBatchModalModel] = useState<string | null>(null);
   const [modalBatchInputs, setModalBatchInputs] = useState<{ [key: string]: number | "" }>({});
   const [customQuickSet, setCustomQuickSet] = useState<number | "">("");
+  const [renamingBatchId, setRenamingBatchId] = useState<string | null>(null);
+  const [renamedBatchValue, setRenamedBatchValue] = useState("");
   const [modalAdminPassword, setModalAdminPassword] = useState("");
   const [modalPasswordError, setModalPasswordError] = useState<string | null>(null);
 
@@ -6471,11 +6474,133 @@ function InventoryView({
     }
     setModalBatchInputs(initialInputs);
     setCustomQuickSet("");
+    setRenamingBatchId(null);
+    setRenamedBatchValue("");
     if (currentUser?.role === "Admin" && currentUser.password) {
       setModalAdminPassword(currentUser.password);
     } else {
       setModalAdminPassword("");
     }
+    setModalPasswordError(null);
+  };
+
+  const handleRenameBatch = (oldBatchId: string, newBatchId: string) => {
+    if (!batchModalModel) return;
+    const cleanNew = cleanVal(newBatchId);
+    if (!cleanNew) {
+      setModalPasswordError("New batch number cannot be empty.");
+      return;
+    }
+    if (cleanNew === cleanVal(oldBatchId)) {
+      setRenamingBatchId(null);
+      setRenamedBatchValue("");
+      return;
+    }
+
+    const enteredPw = modalAdminPassword.trim();
+    if (!enteredPw) {
+      setModalPasswordError("Admin password is required below to authorize renaming batch numbers.");
+      return;
+    }
+
+    const adminAccounts = (users || []).filter((u) => u.role === "Admin");
+    const matchedAdmin =
+      (currentUser?.role === "Admin" && currentUser.password === enteredPw ? currentUser : null) ||
+      adminAccounts.find((u) => u.password === enteredPw) ||
+      (enteredPw === "password123" ? (adminAccounts[0] || defaultUsers[0]) : null);
+
+    if (!matchedAdmin) {
+      setModalPasswordError(
+        "Incorrect admin password. You must provide a valid administrator password (default: 'password123') to authorize changes."
+      );
+      return;
+    }
+
+    const timeNow = formatTimestamp();
+    let affectedCount = 0;
+
+    // Update all matching balances
+    const updatedBalances = balances.map((b) => {
+      const item = items.find((x) => x.code.trim().toUpperCase() === b.code.trim().toUpperCase());
+      const itemModel = item?.model && item.model.trim() ? item.model.trim() : "—";
+      const matchesModel =
+        itemModel.toLowerCase() === batchModalModel.toLowerCase() ||
+        (b.batchNo && cleanVal(b.batchNo) === cleanVal(oldBatchId));
+
+      if (cleanVal(b.batchNo) === cleanVal(oldBatchId) && matchesModel) {
+        affectedCount++;
+        return {
+          ...b,
+          batchNo: cleanNew,
+          updatedAt: timeNow,
+          timestamp: timeNow,
+        };
+      }
+      return b;
+    });
+
+    setBalances(updatedBalances);
+
+    // Update batchQuantities map
+    const oldKey = `${batchModalModel.trim()}_${oldBatchId.trim()}`;
+    const newKey = `${batchModalModel.trim()}_${cleanNew}`;
+    const oldQtyVal =
+      typeof batchQuantities[oldKey] === "number"
+        ? batchQuantities[oldKey]
+        : modalBatchInputs[oldBatchId] !== "" && typeof modalBatchInputs[oldBatchId] === "number"
+        ? modalBatchInputs[oldBatchId]
+        : 1;
+
+    const nextBatchQuantities = { ...batchQuantities };
+    delete nextBatchQuantities[oldKey];
+    nextBatchQuantities[newKey] = oldQtyVal;
+    setBatchQuantities(nextBatchQuantities);
+    localStorage.setItem("wh_batch_quantities", JSON.stringify(nextBatchQuantities));
+
+    // Update modalBatchInputs
+    setModalBatchInputs((prev) => {
+      const next: { [key: string]: number | "" } = { ...prev };
+      const currentInputVal = next[oldBatchId] !== undefined ? next[oldBatchId] : oldQtyVal;
+      delete next[oldBatchId];
+      next[cleanNew] = currentInputVal;
+      return next;
+    });
+
+    // Create Audit Transaction
+    const renameTx: Transaction = {
+      id: txNo("BAT-RN"),
+      type: "Adjustment",
+      code: `BATCH-${cleanNew}`,
+      partName: `Batch Renamed: ${oldBatchId} → ${cleanNew}`,
+      desc: `Vehicle Model ${batchModalModel}: Renamed Batch #${oldBatchId} to #${cleanNew} (${affectedCount} parts updated)`,
+      batchNo: cleanNew,
+      qty: affectedCount,
+      source: `Batch #${oldBatchId}`,
+      dest: `Batch #${cleanNew}`,
+      ref: `Batch Renamed by Admin [@${matchedAdmin.username}]`,
+      user: currentUser?.username || matchedAdmin.username || "admin",
+      receiverName: `Admin Authorized: ${matchedAdmin.name || "System Administrator"}`,
+      time: timeNow,
+      status: "Posted",
+    };
+
+    if (setTransactions) {
+      setTransactions((prev) => [renameTx, ...prev]);
+    }
+
+    // Push to Firebase Cloud Firestore
+    pushWarehouseStateToCloud(items, updatedBalances, [renameTx, ...(transactions || [])], users || []).catch(
+      (err) => console.error("Cloud push failed:", err)
+    );
+
+    setNotice({
+      type: "success",
+      msg: `✓ Batch #${oldBatchId} successfully renamed to #${cleanNew} for model "${batchModalModel}" (${affectedCount} inventory balance records updated). Admin authorized (@${matchedAdmin.username}).`,
+    });
+    setTimeout(() => setNotice(null), 5000);
+
+    setRenamingBatchId(null);
+    setRenamedBatchValue("");
     setModalPasswordError(null);
   };
 
@@ -6675,6 +6800,7 @@ function InventoryView({
     setEditingBalance(b);
     setNewQty(b.qty);
     setNewLoc(b.loc || "");
+    setNewBatchNo(b.batchNo || "");
     // If the currently logged-in user is an Admin, pre-fill password for seamless authorized editing
     if (currentUser?.role === "Admin" && currentUser.password) {
       setAdminPassword(currentUser.password);
@@ -6690,6 +6816,7 @@ function InventoryView({
   const handleCloseEdit = () => {
     setEditingBalance(null);
     setNewLoc("");
+    setNewBatchNo("");
     setAdminPassword("");
     setPasswordError(null);
   };
@@ -6741,11 +6868,13 @@ function InventoryView({
     const targetCode = editingBalance.code.trim().toUpperCase();
     const targetCase = cleanVal(editingBalance.caseNo);
     const targetBatch = cleanVal(editingBalance.batchNo);
+    const newBatchTrimmed = cleanVal(newBatchNo);
+    const isBatchChanged = newBatchTrimmed !== targetBatch;
 
     let updated: Balance[] = [];
 
-    if (!isLocChanged) {
-      // 1A. Location didn't change: Update quantity in-place
+    if (!isLocChanged && !isBatchChanged) {
+      // 1A. Neither Location nor Batch changed: Update quantity in-place
       let isMatched = false;
 
       // Pass 1: Match code + loc + caseNo + batchNo
@@ -6803,7 +6932,7 @@ function InventoryView({
         updated = [...balances, newBal];
       }
     } else {
-      // 1B. Location CHANGED: Relocate stock to new location
+      // 1B. Location or Batch CHANGED: Relocate or re-batch stock
       let oldRecordIndex = balances.findIndex((b) => {
         const codeMatch = b.code.trim().toUpperCase() === targetCode;
         const locMatch = b.loc.trim().toLowerCase() === oldLoc.toLowerCase();
@@ -6826,7 +6955,7 @@ function InventoryView({
         if (idx === oldRecordIndex) return false;
         const codeMatch = b.code.trim().toUpperCase() === targetCode;
         const locMatch = b.loc.trim().toLowerCase() === trimmedLoc.toLowerCase();
-        const batchMatch = cleanVal(b.batchNo) === targetBatch;
+        const batchMatch = cleanVal(b.batchNo) === newBatchTrimmed;
         const caseMatch = cleanVal(b.caseNo) === targetCase;
         return codeMatch && locMatch && batchMatch && caseMatch;
       });
@@ -6839,7 +6968,7 @@ function InventoryView({
             const isDest =
               b.code.trim().toUpperCase() === targetCode &&
               b.loc.trim().toLowerCase() === trimmedLoc.toLowerCase() &&
-              cleanVal(b.batchNo) === targetBatch &&
+              cleanVal(b.batchNo) === newBatchTrimmed &&
               cleanVal(b.caseNo) === targetCase;
             if (isDest) {
               return {
@@ -6852,13 +6981,14 @@ function InventoryView({
             return b;
           });
       } else if (oldRecordIndex !== -1) {
-        // Direct update of the existing record's location and quantity
+        // Direct update of the existing record's location, batch and quantity
         updated = balances.map((b, idx) => {
           if (idx === oldRecordIndex) {
             return {
               ...b,
               loc: trimmedLoc,
               qty: qNum,
+              batchNo: newBatchTrimmed || undefined,
               updatedAt: timeNow,
               timestamp: timeNow,
             };
@@ -6872,7 +7002,7 @@ function InventoryView({
           loc: trimmedLoc,
           qty: qNum,
           caseNo: targetCase || undefined,
-          batchNo: targetBatch || undefined,
+          batchNo: newBatchTrimmed || undefined,
           updatedAt: timeNow,
           timestamp: timeNow,
         };
@@ -6893,9 +7023,14 @@ function InventoryView({
       (i) => i.code.trim().toUpperCase() === targetCode
     );
     const finalReason = customReason.trim() ? customReason.trim() : reason;
-    const movementDetail = isLocChanged
-      ? `Relocated: ${oldLoc} → ${trimmedLoc} (${oldQty} → ${qNum} pcs)`
-      : `Stock Adjusted (${oldQty} → ${qNum} pcs)`;
+
+    const changeNotes = [];
+    if (isLocChanged) changeNotes.push(`Location moved "${oldLoc}" → "${trimmedLoc}"`);
+    if (delta !== 0) changeNotes.push(`Quantity adjusted ${oldQty.toLocaleString()} → ${qNum.toLocaleString()} pcs (${deltaStr} pcs)`);
+    if (isBatchChanged) changeNotes.push(`Batch number changed "${editingBalance.batchNo || "None"}" → "${newBatchTrimmed || "None"}"`);
+    if (changeNotes.length === 0) changeNotes.push("Details confirmed");
+
+    const movementDetail = changeNotes.join(", ");
 
     const newTx: Transaction = {
       id: txNo("ADJ"),
@@ -6903,7 +7038,7 @@ function InventoryView({
       code: targetCode,
       partName: matchedItem?.desc || editingBalance.code,
       desc: matchedItem?.desc || editingBalance.code,
-      batchNo: targetBatch || undefined,
+      batchNo: newBatchTrimmed || targetBatch || undefined,
       caseNo: targetCase || undefined,
       qty: Math.abs(delta) > 0 ? Math.abs(delta) : qNum,
       source: isLocChanged ? oldLoc : `Inventory Adjustment (${oldQty} → ${qNum})`,
@@ -6923,11 +7058,6 @@ function InventoryView({
     pushWarehouseStateToCloud(items, updated, [newTx, ...(transactions || [])], users || []).catch(
       (err) => console.error("Cloud push failed:", err)
     );
-
-    const changeNotes = [];
-    if (isLocChanged) changeNotes.push(`Location moved "${oldLoc}" → "${trimmedLoc}"`);
-    if (delta !== 0) changeNotes.push(`Quantity adjusted ${oldQty.toLocaleString()} → ${qNum.toLocaleString()} pcs (${deltaStr} pcs)`);
-    if (changeNotes.length === 0) changeNotes.push("Details confirmed");
 
     setNotice({
       type: "success",
@@ -7249,6 +7379,19 @@ function InventoryView({
                                     <span className="text-[10px] font-extrabold text-purple-800 bg-purple-100/90 px-1.5 py-0.2 rounded border border-purple-200/60">
                                       {setQty} {setQty === 1 ? "set" : "sets"}
                                     </span>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleOpenBatchConfig(m);
+                                        setRenamingBatchId(batchId);
+                                        setRenamedBatchValue(batchId);
+                                      }}
+                                      className="p-0.5 hover:bg-blue-200 rounded text-blue-700 hover:text-blue-900 cursor-pointer ml-0.5"
+                                      title={`Rename Batch #${batchId}`}
+                                    >
+                                      <Edit2 size={9} />
+                                    </button>
                                   </span>
                                 );
                               })
@@ -7368,6 +7511,19 @@ function InventoryView({
                                         <span className="text-[10px] font-extrabold text-purple-800 bg-purple-100 px-1 rounded">
                                           {setQty} {setQty === 1 ? "set" : "sets"}
                                         </span>
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleOpenBatchConfig(m);
+                                            setRenamingBatchId(batchId);
+                                            setRenamedBatchValue(batchId);
+                                          }}
+                                          className="p-0.5 hover:bg-blue-200 rounded text-blue-700 hover:text-blue-900 cursor-pointer ml-0.5"
+                                          title={`Rename Batch #${batchId}`}
+                                        >
+                                          <Edit2 size={9} />
+                                        </button>
                                       </span>
                                     );
                                   })
@@ -7704,6 +7860,39 @@ function InventoryView({
                     </button>
                   ))}
                 </div>
+              </div>
+
+              {/* Batch Number Input */}
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="block text-xs font-semibold text-[#42566c]">
+                    Batch Number
+                  </label>
+                  <span className="text-xs text-[#65768a]">
+                    Current: <strong className="font-mono text-[#18324d]">{editingBalance.batchNo || "None"}</strong>
+                  </span>
+                </div>
+                <input
+                  type="text"
+                  value={newBatchNo}
+                  onChange={(e) => {
+                    setNewBatchNo(e.target.value.toUpperCase());
+                    if (e.target.value.trim().toUpperCase() !== (editingBalance.batchNo || "").toUpperCase() && reason === "Cycle Count / Physical Stocktake") {
+                      setReason("Data Correction");
+                    }
+                  }}
+                  placeholder="e.g. 60, 68, 69-2, BATCH-01..."
+                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono font-bold bg-white text-[#18324d] uppercase focus:ring-2 focus:ring-[#2463a6] focus:outline-none"
+                />
+                {cleanVal(newBatchNo) !== cleanVal(editingBalance.batchNo) && (
+                  <div className="mt-1.5 flex items-center gap-1.5 text-xs text-indigo-700 bg-indigo-50 border border-indigo-200 px-2.5 py-1 rounded-lg">
+                    <ArrowRight size={13} className="shrink-0" />
+                    <span>
+                      Batch will update from <strong className="font-mono">{editingBalance.batchNo || "None"}</strong> →{" "}
+                      <strong className="font-mono">{newBatchNo.trim().toUpperCase() || "None"}</strong>
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* Quantity Adjustment */}
@@ -8194,20 +8383,81 @@ function InventoryView({
                         return (
                           <div
                             key={batchId}
-                            className="flex items-center justify-between p-3 bg-[#fafbfc] border border-[#dfe6ee] rounded-xl hover:bg-white transition"
+                            className={`flex flex-col sm:flex-row sm:items-center justify-between p-3.5 border rounded-xl transition gap-3 ${
+                              renamingBatchId === batchId
+                                ? "bg-purple-50/60 border-purple-300 shadow-xs ring-1 ring-purple-300"
+                                : "bg-[#fafbfc] border-[#dfe6ee] hover:bg-white"
+                            }`}
                           >
-                            <div className="min-w-0 pr-3">
-                              <div className="flex items-center gap-2">
-                                <span className="font-mono font-bold text-sm text-[#18324d]">
-                                  Batch #{batchId}
-                                </span>
-                                <span className="text-[11px] font-semibold text-blue-800 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
-                                  {batchPcs.toLocaleString()} pcs on hand
-                                </span>
-                              </div>
-                              <span className="text-[11px] text-[#65768a] block mt-0.5">
-                                Model: <strong>{batchModalModel}</strong>
-                              </span>
+                            <div className="min-w-0 flex-1">
+                              {renamingBatchId === batchId ? (
+                                <div className="space-y-1.5">
+                                  <div className="text-[11px] font-bold text-purple-950 flex items-center gap-1">
+                                    <Edit2 size={11} className="text-purple-700" />
+                                    <span>Rename Batch #{batchId}:</span>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <input
+                                      type="text"
+                                      value={renamedBatchValue}
+                                      onChange={(e) => setRenamedBatchValue(e.target.value.toUpperCase())}
+                                      placeholder="New Batch #"
+                                      className="w-40 px-2.5 py-1 text-xs font-mono font-bold border-2 border-purple-400 rounded-lg bg-white text-[#18324d] uppercase focus:outline-none focus:ring-2 focus:ring-purple-600"
+                                      autoFocus
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRenameBatch(batchId, renamedBatchValue)}
+                                      className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition flex items-center gap-1 shadow-2xs cursor-pointer"
+                                      title="Confirm and rename batch across all inventory records"
+                                    >
+                                      <Check size={13} />
+                                      <span>Save Rename</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setRenamingBatchId(null);
+                                        setRenamedBatchValue("");
+                                      }}
+                                      className="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-xs font-medium transition cursor-pointer"
+                                      title="Cancel"
+                                    >
+                                      <X size={13} />
+                                      <span>Cancel</span>
+                                    </button>
+                                  </div>
+                                  <span className="text-[10px] text-[#65768a] block">
+                                    * Updates all {batchPcs.toLocaleString()} pcs in model {batchModalModel} to this new batch ID. Requires Admin password verification below.
+                                  </span>
+                                </div>
+                              ) : (
+                                <div>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="font-mono font-bold text-sm text-[#18324d]">
+                                      Batch #{batchId}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setRenamingBatchId(batchId);
+                                        setRenamedBatchValue(batchId);
+                                      }}
+                                      className="px-2 py-0.5 text-purple-700 hover:text-purple-900 bg-purple-50 hover:bg-purple-100 border border-purple-200 rounded-md text-[10px] font-bold flex items-center gap-1 transition cursor-pointer"
+                                      title={`Edit or Rename Batch #${batchId}`}
+                                    >
+                                      <Edit2 size={10} />
+                                      <span>Edit Batch #</span>
+                                    </button>
+                                    <span className="text-[11px] font-semibold text-blue-800 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                                      {batchPcs.toLocaleString()} pcs on hand
+                                    </span>
+                                  </div>
+                                  <span className="text-[11px] text-[#65768a] block mt-0.5">
+                                    Model: <strong>{batchModalModel}</strong>
+                                  </span>
+                                </div>
+                              )}
                             </div>
 
                             <div className="flex items-center gap-2 shrink-0">

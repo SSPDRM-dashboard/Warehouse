@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import * as XLSX from "xlsx";
 import { GoogleGenAI } from "@google/genai";
 import {
@@ -45,6 +45,7 @@ import {
   ChevronUp,
   Filter,
   Tag,
+  Settings,
 } from "lucide-react";
 import {
   Item,
@@ -3235,6 +3236,132 @@ function ReceivingView({
   );
   const [notice, setNotice] = useState<{ msg: string; type: "success" | "error" | "info" } | null>(null);
 
+  // Sub-page state: "intake" (Inbound Container Receiving & Staging) or "today" (Today's Receiving Log)
+  const [receivingSubPage, setReceivingSubPage] = useState<"intake" | "today">("intake");
+  const [selectedReceivingDate, setSelectedReceivingDate] = useState(() => {
+    return new Date().toISOString().slice(0, 10);
+  });
+  const [todayReceivingSearch, setTodayReceivingSearch] = useState("");
+  const [todayContainerFilter, setTodayContainerFilter] = useState("ALL");
+
+  // Today's Receiving Transactions (filtered by selectedReceivingDate, default today)
+  const todayReceivingTxs = useMemo(() => {
+    return transactions.filter((t) => {
+      if (t.type !== "Receiving") return false;
+      const txDate = t.time ? t.time.slice(0, 10) : "";
+      return txDate === selectedReceivingDate;
+    });
+  }, [transactions, selectedReceivingDate]);
+
+  // Today's Receiving Summary Statistics
+  const todayReceivingStats = useMemo(() => {
+    const containers = new Set<string>();
+    const batches = new Set<string>();
+    const parts = new Set<string>();
+    let totalQty = 0;
+
+    for (const t of todayReceivingTxs) {
+      if (t.containerNo && t.containerNo.trim() && t.containerNo !== "—") {
+        containers.add(t.containerNo.trim());
+      }
+      if (t.batchNo && t.batchNo.trim() && t.batchNo !== "—") {
+        batches.add(t.batchNo.trim());
+      }
+      if (t.code && t.code.trim()) {
+        parts.add(t.code.trim());
+      }
+      totalQty += t.qty || 0;
+    }
+
+    return {
+      containersCount: containers.size,
+      batchesCount: batches.size,
+      partsCount: parts.size,
+      totalQty,
+      containersList: Array.from(containers).sort(),
+    };
+  }, [todayReceivingTxs]);
+
+  // Filtered Today's Receiving Transactions for table display
+  const filteredTodayReceivingTxs = useMemo(() => {
+    return todayReceivingTxs.filter((t) => {
+      if (todayContainerFilter !== "ALL") {
+        if (
+          String(t.containerNo || "")
+            .trim()
+            .toLowerCase() !== todayContainerFilter.trim().toLowerCase()
+        ) {
+          return false;
+        }
+      }
+      if (!todayReceivingSearch.trim()) return true;
+      const q = todayReceivingSearch.toLowerCase();
+      return (
+        t.code.toLowerCase().includes(q) ||
+        (t.desc && t.desc.toLowerCase().includes(q)) ||
+        (t.partName && t.partName.toLowerCase().includes(q)) ||
+        (t.containerNo && t.containerNo.toLowerCase().includes(q)) ||
+        (t.batchNo && t.batchNo.toLowerCase().includes(q)) ||
+        (t.caseNo && t.caseNo.toLowerCase().includes(q)) ||
+        (t.receiverName && t.receiverName.toLowerCase().includes(q)) ||
+        (t.dest && t.dest.toLowerCase().includes(q)) ||
+        (t.ref && t.ref.toLowerCase().includes(q)) ||
+        (t.model && t.model.toLowerCase().includes(q))
+      );
+    });
+  }, [todayReceivingTxs, todayContainerFilter, todayReceivingSearch]);
+
+  // Export Today's Receiving Logs
+  const handleDownloadTodayReceiving = (format: "xlsx" | "csv") => {
+    const headers = [
+      "Receiving Date & Time",
+      "Container No",
+      "Batch No / Lot",
+      "Part No",
+      "Description",
+      "Model",
+      "Case No",
+      "Received Qty",
+      "Destination Location",
+      "Receiver Name (PIC)",
+      "DO / Supplier Ref",
+      "Transaction ID",
+      "Status",
+    ];
+
+    const getRowData = (t: Transaction) => {
+      const itemInfo = items.find((i) => i.code.trim().toUpperCase() === t.code.trim().toUpperCase());
+      return [
+        t.time,
+        t.containerNo || "—",
+        t.batchNo || "—",
+        t.code,
+        t.desc || t.partName || "—",
+        t.model || itemInfo?.model || "—",
+        t.caseNo || "—",
+        t.qty,
+        t.dest,
+        t.receiverName || t.user || "—",
+        t.ref || "—",
+        t.id,
+        t.status || "Posted",
+      ];
+    };
+
+    const rowsData = filteredTodayReceivingTxs.map(getRowData);
+
+    if (format === "xlsx") {
+      downloadXLSX(
+        `receiving_log_${selectedReceivingDate}.xlsx`,
+        headers,
+        rowsData,
+        `Receiving Log (${selectedReceivingDate})`
+      );
+    } else {
+      downloadCSV(`receiving_log_${selectedReceivingDate}.csv`, headers, rowsData);
+    }
+  };
+
   // Sync active container and staging to localStorage
   useEffect(() => {
     if (activeContainer) {
@@ -3650,22 +3777,55 @@ function ReceivingView({
       {/* TOP HEADER BAR */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h2 className="text-2xl font-bold text-[#18324d]">Stock Receiving</h2>
-          <p className="text-sm text-[#65768a]">
-            Inbound container receiving workflow: start container, key in parts into temporary staging, then confirm to inventory.
+          <div className="flex items-center gap-2">
+            <h2 className="text-2xl font-bold text-[#18324d]">Stock Receiving</h2>
+            <span className="px-2.5 py-0.5 bg-blue-100 text-blue-900 border border-blue-200 text-xs font-bold rounded-full">
+              Inbound Dock Management
+            </span>
+          </div>
+          <p className="text-sm text-[#65768a] mt-0.5">
+            {receivingSubPage === "intake"
+              ? "Inbound container receiving workflow: start container, key in parts into temporary staging, then confirm to inventory."
+              : `Today's receiving logs and verified container intake records for ${selectedReceivingDate}.`}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={openNewContainerModal}
-            className="flex items-center gap-1.5 px-4 py-2 bg-[#2463a6] text-white rounded-xl text-xs font-bold hover:bg-[#1d528a] transition shadow-xs"
-          >
-            <Plus size={16} /> New Container
-          </button>
+          {receivingSubPage === "intake" ? (
+            <button
+              type="button"
+              onClick={openNewContainerModal}
+              className="flex items-center gap-1.5 px-4 py-2 bg-[#2463a6] text-white rounded-xl text-xs font-bold hover:bg-[#1d528a] transition shadow-xs cursor-pointer"
+            >
+              <Plus size={16} /> New Container
+            </button>
+          ) : (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => handleDownloadTodayReceiving("xlsx")}
+                className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 rounded-xl text-xs font-semibold shadow-2xs transition cursor-pointer"
+                title="Export today's receiving log to Excel (.xlsx)"
+              >
+                <FileSpreadsheet size={14} className="text-emerald-700" />
+                <span>Export XLSX</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDownloadTodayReceiving("csv")}
+                className="flex items-center gap-1.5 px-3.5 py-2 bg-white hover:bg-[#f7f9fc] border border-[#cfd9e4] text-[#18324d] rounded-xl text-xs font-semibold shadow-2xs transition cursor-pointer"
+                title="Export today's receiving log to CSV"
+              >
+                <Download size={14} />
+                <span>Export CSV</span>
+              </button>
+            </div>
+          )}
+
           {setPage && (
             <button
+              type="button"
               onClick={() => setPage("reports")}
-              className="flex items-center gap-2 px-3 py-2 bg-white border border-[#cfd9e4] text-[#18324d] rounded-xl text-xs font-semibold hover:bg-gray-50 transition shadow-xs"
+              className="flex items-center gap-2 px-3 py-2 bg-white border border-[#cfd9e4] text-[#18324d] rounded-xl text-xs font-semibold hover:bg-gray-50 transition shadow-xs cursor-pointer"
             >
               <FileSpreadsheet size={14} className="text-emerald-700" /> Daily Incoming Report
             </button>
@@ -3673,396 +3833,693 @@ function ReceivingView({
         </div>
       </div>
 
-      {/* ACTIVE CONTAINER STATUS BAR */}
-      {activeContainer ? (
-        <div className="p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl flex flex-col md:flex-row justify-between items-start md:items-center gap-3 shadow-xs">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-blue-600 text-white rounded-xl shadow-xs">
-              <Boxes size={22} />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold uppercase tracking-wider text-blue-900">Current Active Container</span>
-                <span className="px-2 py-0.5 bg-blue-100 text-blue-800 rounded-full text-[10px] font-bold">
-                  Receiving In-Progress
-                </span>
+      {/* SUB-PAGE TABS NAVIGATION */}
+      <div className="bg-white p-2 rounded-2xl border border-[#dfe6ee] shadow-2xs flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3">
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
+          {/* Sub-page 1: Inbound Container Receiving */}
+          <button
+            type="button"
+            onClick={() => setReceivingSubPage("intake")}
+            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-2 whitespace-nowrap cursor-pointer ${
+              receivingSubPage === "intake"
+                ? "bg-[#2463a6] text-white shadow-xs font-bold"
+                : "text-[#42566c] hover:bg-[#f1f5f9] hover:text-[#18324d]"
+            }`}
+          >
+            <Box size={16} />
+            <span>Inbound Container Receiving & Staging</span>
+            {stagedItems.length > 0 && (
+              <span className="px-2 py-0.5 bg-red-500 text-white text-[10px] font-extrabold rounded-full animate-pulse">
+                {stagedItems.length} Staged
+              </span>
+            )}
+          </button>
+
+          {/* Sub-page 2: Today's Receiving Log */}
+          <button
+            type="button"
+            onClick={() => setReceivingSubPage("today")}
+            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-2 whitespace-nowrap cursor-pointer ${
+              receivingSubPage === "today"
+                ? "bg-[#2463a6] text-white shadow-xs font-bold"
+                : "text-[#42566c] hover:bg-[#f1f5f9] hover:text-[#18324d]"
+            }`}
+          >
+            <Clock size={16} />
+            <span>Today's Receiving Log</span>
+            <span
+              className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+                receivingSubPage === "today"
+                  ? "bg-white text-[#2463a6]"
+                  : "bg-blue-100 text-blue-900 border border-blue-200"
+              }`}
+            >
+              {todayReceivingTxs.length} Receipts
+            </span>
+          </button>
+        </div>
+
+        {receivingSubPage === "today" && (
+          <div className="flex items-center gap-2 self-end sm:self-auto text-xs px-2">
+            <span className="text-[#65768a] font-semibold shrink-0">Log Date:</span>
+            <input
+              type="date"
+              value={selectedReceivingDate}
+              onChange={(e) => setSelectedReceivingDate(e.target.value)}
+              className="px-2.5 py-1.5 border border-[#cfd9e4] rounded-xl text-xs font-mono font-bold bg-white text-[#18324d] focus:ring-2 focus:ring-[#2463a6]"
+            />
+            {selectedReceivingDate !== new Date().toISOString().slice(0, 10) && (
+              <button
+                type="button"
+                onClick={() => setSelectedReceivingDate(new Date().toISOString().slice(0, 10))}
+                className="px-2.5 py-1.5 bg-blue-50 text-blue-800 border border-blue-200 font-bold rounded-xl text-xs hover:bg-blue-100 cursor-pointer transition"
+              >
+                Today
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {receivingSubPage === "today" ? (
+        /* SUB-PAGE 2: TODAY'S RECEIVING LOG */
+        <div className="space-y-5">
+          {/* TODAY'S RECEIVING SUMMARY STATS */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* Containers Received */}
+            <div className="bg-white border border-[#dfe6ee] rounded-2xl p-4 shadow-2xs flex items-center gap-3.5">
+              <div className="w-11 h-11 rounded-xl bg-blue-50 border border-blue-200 text-blue-700 flex items-center justify-center shrink-0">
+                <Boxes size={22} />
               </div>
-              <div className="text-sm font-bold font-mono text-[#18324d] mt-0.5 flex flex-wrap items-center gap-x-4 gap-y-1">
-                <span>
-                  Container: <strong className="text-blue-700">{activeContainer.containerNo}</strong>
-                </span>
-                <span>
-                  Batch/Lot: <strong className="text-emerald-700">{activeContainer.batchNo}</strong>
-                </span>
-                <span className="text-xs text-[#65768a] font-sans">
-                  Receiver: <strong className="text-[#18324d]">{activeContainer.receiverName}</strong>
-                </span>
+              <div>
+                <div className="text-[11px] font-bold text-[#65768a] uppercase tracking-wider">
+                  Containers Received
+                </div>
+                <div className="text-xl font-extrabold text-[#18324d]">
+                  {todayReceivingStats.containersCount}{" "}
+                  <span className="text-xs font-semibold text-[#65768a]">containers</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Unique Batches */}
+            <div className="bg-white border border-[#dfe6ee] rounded-2xl p-4 shadow-2xs flex items-center gap-3.5">
+              <div className="w-11 h-11 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-700 flex items-center justify-center shrink-0">
+                <Package size={22} />
+              </div>
+              <div>
+                <div className="text-[11px] font-bold text-[#65768a] uppercase tracking-wider">
+                  Unique Batches / Lots
+                </div>
+                <div className="text-xl font-extrabold text-indigo-950">
+                  {todayReceivingStats.batchesCount}{" "}
+                  <span className="text-xs font-semibold text-indigo-600">batches</span>
+                </div>
+              </div>
+            </div>
+
+            {/* SKUs / Part Records */}
+            <div className="bg-white border border-[#dfe6ee] rounded-2xl p-4 shadow-2xs flex items-center gap-3.5">
+              <div className="w-11 h-11 rounded-xl bg-amber-50 border border-amber-200 text-amber-700 flex items-center justify-center shrink-0">
+                <Tag size={22} />
+              </div>
+              <div>
+                <div className="text-[11px] font-bold text-[#65768a] uppercase tracking-wider">
+                  Part SKUs Received
+                </div>
+                <div className="text-xl font-extrabold text-[#18324d]">
+                  {todayReceivingStats.partsCount}{" "}
+                  <span className="text-xs font-semibold text-[#65768a]">SKUs</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Total Units Received */}
+            <div className="bg-white border border-[#dfe6ee] rounded-2xl p-4 shadow-2xs flex items-center gap-3.5">
+              <div className="w-11 h-11 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center justify-center shrink-0">
+                <CheckCircle2 size={22} />
+              </div>
+              <div>
+                <div className="text-[11px] font-bold text-[#65768a] uppercase tracking-wider">
+                  Total Received Qty
+                </div>
+                <div className="text-xl font-extrabold text-emerald-950">
+                  {todayReceivingStats.totalQty.toLocaleString()}{" "}
+                  <span className="text-xs font-semibold text-emerald-700">pcs</span>
+                </div>
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleDiscardContainer}
-              className="px-3 py-1.5 bg-white border border-red-300 text-red-700 hover:bg-red-50 rounded-xl text-xs font-semibold transition"
-            >
-              Discard Container
-            </button>
-            <button
-              onClick={openNewContainerModal}
-              className="px-3.5 py-1.5 bg-[#2463a6] text-white rounded-xl text-xs font-semibold hover:bg-[#1d528a] transition shadow-xs flex items-center gap-1.5"
-            >
-              <Plus size={14} /> New Container
-            </button>
+
+          {/* MAIN TABLE CONTAINER FOR TODAY'S RECEIVING */}
+          <div className="bg-white border border-[#dfe6ee] rounded-2xl p-6 shadow-xs space-y-4">
+            {/* Table Search & Filters */}
+            <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-3">
+              <div className="relative flex-1 w-full">
+                <Search className="absolute left-3.5 top-3 text-[#65768a]" size={16} />
+                <input
+                  type="text"
+                  value={todayReceivingSearch}
+                  onChange={(e) => setTodayReceivingSearch(e.target.value)}
+                  placeholder="Search part no, description, container no, batch, case no, model or receiver..."
+                  className="w-full pl-10 pr-4 py-2.5 border border-[#cfd9e4] rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#2463a6]"
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2.5 w-full lg:w-auto">
+                {/* Container Filter */}
+                <div className="flex items-center gap-1.5 bg-[#f7f9fc] border border-[#cfd9e4] px-3 py-1.5 rounded-xl text-xs">
+                  <span className="font-semibold text-[#42566c] shrink-0">Container:</span>
+                  <select
+                    value={todayContainerFilter}
+                    onChange={(e) => setTodayContainerFilter(e.target.value)}
+                    className="bg-transparent font-bold text-[#18324d] focus:outline-none cursor-pointer pr-1"
+                  >
+                    <option value="ALL">All Containers ({todayReceivingStats.containersCount})</option>
+                    {todayReceivingStats.containersList.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="text-xs text-[#65768a] font-medium shrink-0">
+                  Showing <strong className="text-[#18324d]">{filteredTodayReceivingTxs.length}</strong> records
+                </div>
+              </div>
+            </div>
+
+            {/* TABLE */}
+            <div className="overflow-x-auto border border-[#dfe6ee] rounded-xl">
+              <table className="w-full text-left border-collapse min-w-[960px] text-xs">
+                <thead>
+                  <tr className="bg-[#f7f9fc] text-[#5c6f83] font-bold border-b border-[#dfe6ee]">
+                    <th className="p-3 w-10">#</th>
+                    <th className="p-3">Receiving Time</th>
+                    <th className="p-3 bg-blue-50/60 text-blue-900">Container No</th>
+                    <th className="p-3">Batch No / Lot</th>
+                    <th className="p-3">Part No</th>
+                    <th className="p-3">Description</th>
+                    <th className="p-3">Model</th>
+                    <th className="p-3">Case No</th>
+                    <th className="p-3 text-right bg-emerald-50/50 text-emerald-900">Received Qty</th>
+                    <th className="p-3">Destination Location</th>
+                    <th className="p-3">Receiver (PIC)</th>
+                    <th className="p-3">DO / Ref</th>
+                    <th className="p-3 text-center">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#dfe6ee]">
+                  {filteredTodayReceivingTxs.length === 0 ? (
+                    <tr>
+                      <td colSpan={13} className="text-center py-12 text-[#65768a]">
+                        <div className="flex flex-col items-center gap-2">
+                          <Box size={32} className="text-gray-400" />
+                          <div className="font-bold text-sm text-[#18324d]">
+                            No receiving logs found for {selectedReceivingDate}
+                          </div>
+                          <p className="text-xs text-[#65768a] max-w-md">
+                            {todayReceivingSearch || todayContainerFilter !== "ALL"
+                              ? "Try adjusting your search query or container filter."
+                              : "No containers have been received on this date yet. Switch to the 'Inbound Container Receiving & Staging' tab above to start a new container intake."}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => setReceivingSubPage("intake")}
+                            className="mt-2 px-4 py-2 bg-[#2463a6] hover:bg-[#1d528a] text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+                          >
+                            <Plus size={14} /> Go to Container Receiving
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredTodayReceivingTxs.map((t, idx) => {
+                      const itemInfo = items.find(
+                        (i) => i.code.trim().toUpperCase() === t.code.trim().toUpperCase()
+                      );
+
+                      return (
+                        <tr key={t.id || idx} className="hover:bg-[#fcfdfd] transition">
+                          <td className="p-3 font-mono text-gray-500 font-medium">{idx + 1}</td>
+                          <td className="p-3 font-mono text-[#65768a] whitespace-nowrap">
+                            <span className="inline-flex items-center gap-1 bg-white px-2 py-0.5 rounded border border-[#dfe6ee]">
+                              <Clock size={12} className="text-[#2463a6]" />
+                              {t.time || selectedReceivingDate}
+                            </span>
+                          </td>
+                          <td className="p-3 bg-blue-50/30">
+                            <span className="font-mono font-bold text-blue-900 bg-blue-100/80 px-2 py-0.5 rounded border border-blue-200">
+                              {t.containerNo || "—"}
+                            </span>
+                          </td>
+                          <td className="p-3">
+                            <span className="font-mono font-semibold text-indigo-900 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                              {t.batchNo || "—"}
+                            </span>
+                          </td>
+                          <td className="p-3 font-mono font-bold text-[#18324d]">{t.code}</td>
+                          <td
+                            className="p-3 font-medium text-[#18324d] max-w-[220px] truncate"
+                            title={t.desc || t.partName}
+                          >
+                            {t.desc || t.partName || "—"}
+                          </td>
+                          <td className="p-3 text-[#65768a] font-medium">
+                            {t.model || itemInfo?.model || "—"}
+                          </td>
+                          <td className="p-3 font-mono">
+                            {t.caseNo && t.caseNo !== "—" ? (
+                              <span className="px-2 py-0.5 bg-gray-100 text-gray-800 rounded font-semibold border border-gray-200 text-[11px]">
+                                {t.caseNo}
+                              </span>
+                            ) : (
+                              <span className="text-gray-400">—</span>
+                            )}
+                          </td>
+                          <td className="p-3 text-right font-mono font-extrabold text-emerald-700 text-sm bg-emerald-50/30">
+                            +{t.qty.toLocaleString()} pcs
+                          </td>
+                          <td className="p-3 font-mono text-[#42566c]">{t.dest || "Storage"}</td>
+                          <td className="p-3 text-[#18324d] font-medium">
+                            {t.receiverName || t.user || "Operator"}
+                          </td>
+                          <td className="p-3 font-mono text-[#65768a] text-[11px]">
+                            {t.ref || "—"}
+                          </td>
+                          <td className="p-3 text-center">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                              ✓ Posted to Inventory
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       ) : (
-        <div className="p-4 bg-amber-50/70 border border-amber-200 rounded-2xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-amber-200 text-amber-900 rounded-xl">
-              <Box size={22} />
-            </div>
-            <div>
-              <div className="text-xs font-bold text-amber-900 uppercase tracking-wider">No Container Active</div>
-              <div className="text-xs text-amber-800">
-                Please click <strong>"New Container"</strong> to enter Container No and Batch No / Lot before keying in receiving parts.
+        /* SUB-PAGE 1: INBOUND CONTAINER RECEIVING & STAGING */
+        <div className="space-y-6">
+          {/* ACTIVE CONTAINER STATUS BAR */}
+          {activeContainer ? (
+            <div className="p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl flex flex-col md:flex-row justify-between items-start md:items-center gap-3 shadow-xs">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-blue-600 text-white rounded-xl shadow-xs">
+                  <Boxes size={22} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold uppercase tracking-wider text-blue-900">Current Active Container</span>
+                    <span className="px-2 py-0.5 bg-blue-100 text-blue-800 rounded-full text-[10px] font-bold">
+                      Receiving In-Progress
+                    </span>
+                  </div>
+                  <div className="text-sm font-bold font-mono text-[#18324d] mt-0.5 flex flex-wrap items-center gap-x-4 gap-y-1">
+                    <span>
+                      Container: <strong className="text-blue-700">{activeContainer.containerNo}</strong>
+                    </span>
+                    <span>
+                      Batch/Lot: <strong className="text-emerald-700">{activeContainer.batchNo}</strong>
+                    </span>
+                    <span className="text-xs text-[#65768a] font-sans">
+                      Receiver: <strong className="text-[#18324d]">{activeContainer.receiverName}</strong>
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleDiscardContainer}
+                  className="px-3 py-1.5 bg-white border border-red-300 text-red-700 hover:bg-red-50 rounded-xl text-xs font-semibold transition cursor-pointer"
+                >
+                  Discard Container
+                </button>
+                <button
+                  type="button"
+                  onClick={openNewContainerModal}
+                  className="px-3.5 py-1.5 bg-[#2463a6] text-white rounded-xl text-xs font-semibold hover:bg-[#1d528a] transition shadow-xs flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Plus size={14} /> New Container
+                </button>
               </div>
             </div>
-          </div>
-          <button
-            onClick={openNewContainerModal}
-            className="px-4 py-2 bg-[#2463a6] hover:bg-[#1d528a] text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs"
-          >
-            <Plus size={14} /> New Container
-          </button>
-        </div>
-      )}
-
-      {notice && (
-        <div
-          className={`p-3.5 rounded-xl text-xs flex items-center justify-between ${
-            notice.type === "success"
-              ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
-              : notice.type === "error"
-              ? "bg-red-50 text-red-700 border border-red-200"
-              : "bg-blue-50 text-blue-800 border border-blue-200"
-          }`}
-        >
-          <div className="flex items-center gap-2">
-            {notice.type === "success" && <Check size={16} className="text-emerald-600" />}
-            {notice.type === "error" && <AlertCircle size={16} className="text-red-600" />}
-            {notice.type === "info" && <Boxes size={16} className="text-blue-600" />}
-            <span>{notice.msg}</span>
-          </div>
-          <button onClick={() => setNotice(null)} className="font-bold px-1 hover:opacity-75">✕</button>
-        </div>
-      )}
-
-      {/* KEY-IN RECEIVING DETAILS FORM */}
-      <div className="bg-white border border-[#dfe6ee] rounded-2xl p-6 shadow-xs space-y-4">
-          <div className="flex items-center justify-between border-b pb-3">
-            <div>
-              <h3 className="text-base font-bold text-[#18324d]">Key In Receiving Parts</h3>
-              <p className="text-xs text-[#65768a]">
-                {activeContainer
-                  ? `Active for Container: ${activeContainer.containerNo} (Batch: ${activeContainer.batchNo})`
-                  : "Start a container first to enable receiving"}
-              </p>
-            </div>
-            {activeContainer && (
-              <span className="px-2.5 py-1 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-full text-[11px] font-bold">
-                Ready to Key In
-              </span>
-            )}
-          </div>
-
-          {!activeContainer ? (
-            <div className="p-8 text-center bg-gray-50 rounded-xl border border-dashed border-[#cfd9e4] space-y-3">
-              <Box size={32} className="mx-auto text-gray-400" />
-              <div className="text-sm font-semibold text-[#18324d]">Container Setup Required</div>
-              <p className="text-xs text-[#65768a] max-w-sm mx-auto">
-                Before adding receiving details, click the <strong>"New Container"</strong> button to enter the Container No and Batch No / Lot for this inbound shipment.
-              </p>
+          ) : (
+            <div className="p-4 bg-amber-50/70 border border-amber-200 rounded-2xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-amber-200 text-amber-900 rounded-xl">
+                  <Box size={22} />
+                </div>
+                <div>
+                  <div className="text-xs font-bold text-amber-900 uppercase tracking-wider">No Container Active</div>
+                  <div className="text-xs text-amber-800">
+                    Please click <strong>"New Container"</strong> to enter Container No and Batch No / Lot before keying in receiving parts.
+                  </div>
+                </div>
+              </div>
               <button
                 type="button"
                 onClick={openNewContainerModal}
-                className="px-4 py-2 bg-[#2463a6] hover:bg-[#1d528a] text-white rounded-xl text-xs font-bold shadow-xs transition inline-flex items-center gap-1.5"
+                className="px-4 py-2 bg-[#2463a6] hover:bg-[#1d528a] text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
               >
-                <Plus size={14} /> Open New Container Popup
+                <Plus size={14} /> New Container
               </button>
-            </div>
-          ) : (
-            <form onSubmit={handleAddPartToStaging} className="space-y-4">
-              <div className="flex flex-wrap items-center justify-between text-xs bg-blue-50/80 p-2.5 rounded-xl border border-blue-200 text-[#18324d]">
-                <div>Container: <strong className="font-mono text-blue-900">{activeContainer.containerNo}</strong></div>
-                <div>Batch: <strong className="font-mono text-emerald-800">{activeContainer.batchNo}</strong></div>
-                <div>Receiver: <strong className="text-blue-950 font-semibold">{activeContainer.receiverName}</strong></div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-[#42566c] mb-1">Enter Part No *</label>
-                <input
-                  type="text"
-                  list="activeMasterItems"
-                  value={codeQuery}
-                  onChange={(e) => setCodeQuery(e.target.value)}
-                  required
-                  placeholder="Type or select Part No..."
-                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono uppercase bg-white"
-                />
-                <datalist id="activeMasterItems">
-                  {items
-                    .filter((i) => i.active)
-                    .map((i) => (
-                      <option key={i.code} value={i.code}>
-                        {i.desc} ({i.model})
-                      </option>
-                    ))}
-                </datalist>
-              </div>
-
-              {codeQuery && (
-                <div>
-                  {matchedItem ? (
-                    <div className="p-3 bg-emerald-50/60 border border-emerald-200 rounded-xl text-xs space-y-1 animate-in fade-in">
-                      <div className="font-bold text-emerald-950 flex justify-between">
-                        <span>{matchedItem.desc}</span>
-                        <span className="font-mono text-emerald-800">{matchedItem.model}</span>
-                      </div>
-                      <div className="text-emerald-700 font-mono text-[11px]">
-                        Part No: {matchedItem.code} · Current On-Hand: <strong>{stock(matchedItem.code)} units</strong>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs">
-                      Part No not found in active master catalog.
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-[#42566c] mb-1">Case No *</label>
-                  <input
-                    type="text"
-                    value={caseNo}
-                    onChange={(e) => setCaseNo(e.target.value)}
-                    required
-                    placeholder="e.g. CASE-001 or CS-10"
-                    className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono uppercase bg-white focus:outline-none focus:ring-2 focus:ring-[#2463a6]"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-[#42566c] mb-1">Received Quantity *</label>
-                  <input
-                    type="number"
-                    min="0.001"
-                    step="any"
-                    value={qty}
-                    onChange={(e) => setQty(e.target.value === "" ? "" : Number(e.target.value))}
-                    required
-                    placeholder="e.g. 100"
-                    className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[#2463a6]"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-[#42566c] mb-1">Destination Location / Bay</label>
-                <input
-                  type="text"
-                  list="locsReceivingList"
-                  value={loc}
-                  onChange={(e) => setLoc(e.target.value)}
-                  placeholder="e.g. A-01-01 or RECV-01"
-                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm bg-white font-mono focus:outline-none focus:ring-2 focus:ring-[#2463a6]"
-                />
-                <datalist id="locsReceivingList">
-                  {allLocs().map((l) => (
-                    <option key={l} value={l} />
-                  ))}
-                </datalist>
-              </div>
-
-              <button
-                type="submit"
-                className="w-full py-3 bg-[#2463a6] hover:bg-[#1d528a] text-white rounded-xl text-xs font-bold shadow-xs transition flex items-center justify-center gap-2"
-              >
-                <Plus size={16} /> Add Part to Container (Temporary Red Area)
-              </button>
-            </form>
-          )}
-        </div>
-
-      {/* THE RED HIGHLIGHT AREA (Request 6: Temporary staging for current container receiving) */}
-      <div className="border-2 border-red-500 rounded-2xl bg-gradient-to-b from-red-50/90 via-red-50/40 to-white p-6 shadow-md space-y-5">
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3 border-b border-red-200 pb-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-red-600 text-white rounded-xl shadow-xs">
-              <Box size={24} />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-lg font-bold text-red-950 uppercase tracking-wide">
-                  Temporary Container Receiving Area
-                </h3>
-                <span className="px-2.5 py-0.5 bg-red-600 text-white rounded-full text-[10px] font-extrabold uppercase tracking-wider animate-pulse">
-                  Red Highlight Staging
-                </span>
-              </div>
-              <p className="text-xs text-red-900 mt-0.5">
-                All parts added for this container are temporarily saved here and <strong>NOT yet sent to inventory</strong>. Check and confirm below when complete.
-              </p>
-            </div>
-          </div>
-
-          {activeContainer && (
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="px-3 py-1.5 bg-white border border-red-200 rounded-xl text-xs font-mono font-bold text-red-900">
-                Container: {activeContainer.containerNo}
-              </div>
-              <div className="px-3 py-1.5 bg-white border border-red-200 rounded-xl text-xs font-mono font-bold text-blue-900">
-                Batch: {activeContainer.batchNo}
-              </div>
-              <div className="px-3 py-1.5 bg-red-100 border border-red-300 rounded-xl text-xs font-bold text-red-950">
-                {stagedItems.length} parts ({totalStagedQty.toLocaleString()} units)
-              </div>
             </div>
           )}
-        </div>
 
-        {/* TABLE OF STAGED PARTS IN RED AREA */}
-        <div className="overflow-x-auto border border-red-300 rounded-xl bg-white shadow-xs">
-          <table className="w-full text-left border-collapse min-w-[750px]">
-            <thead>
-              <tr className="bg-red-100/70 text-red-950 text-xs font-bold border-b border-red-200">
-                <th className="p-3 w-12">#</th>
-                <th className="p-3">Time Stamp</th>
-                <th className="p-3">Part No</th>
-                <th className="p-3">Description</th>
-                <th className="p-3 bg-red-200/50 text-red-950 font-bold">Case No</th>
-                <th className="p-3">Model</th>
-                <th className="p-3">Batch No</th>
-                <th className="p-3 text-red-800 font-extrabold">Received Qty</th>
-                <th className="p-3">Target Bay</th>
-                <th className="p-3">DO Reference</th>
-                <th className="p-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-red-100 text-xs">
-              {stagedItems.length === 0 ? (
-                <tr>
-                  <td colSpan={11} className="text-center py-8 text-red-800/80 bg-red-50/30">
-                    <div className="font-semibold text-sm text-red-900">
-                      {activeContainer
-                        ? `No parts added to Container ${activeContainer.containerNo} yet.`
-                        : "No active container session."}
-                    </div>
-                    <div className="text-xs text-red-700 mt-1">
-                      {activeContainer
-                        ? "Key in the part number, case number and quantity above, then click '+ Add Part to Container' to stage items here."
-                        : "Click '+ New Container' above to open the popup and start receiving."}
-                    </div>
-                  </td>
-                </tr>
-              ) : (
-                stagedItems.map((item, idx) => (
-                  <tr key={item.id} className="hover:bg-red-50/50 transition">
-                    <td className="p-3 font-mono font-semibold text-gray-500">{idx + 1}</td>
-                    <td className="p-3 font-mono text-[#65768a] text-[11px] whitespace-nowrap">
-                      <span className="inline-flex items-center gap-1 bg-white px-2 py-0.5 rounded border border-red-200">
-                        <Clock size={12} className="text-red-500" />
-                        {item.time}
-                      </span>
-                    </td>
-                    <td className="p-3 font-mono font-bold text-[#18324d]">{item.code}</td>
-                    <td className="p-3 font-medium text-[#18324d] max-w-[200px] truncate" title={item.desc}>
-                      {item.desc}
-                    </td>
-                    <td className="p-3 font-mono">
-                      {item.caseNo && item.caseNo !== "—" ? (
-                        <span className="inline-block px-2 py-0.5 bg-white text-blue-900 rounded font-bold border border-blue-200 text-[11px] shadow-2xs">
-                          {item.caseNo}
-                        </span>
-                      ) : (
-                        <span className="text-gray-400">—</span>
-                      )}
-                    </td>
-                    <td className="p-3 font-medium text-[#65768a]">{item.model || "—"}</td>
-                    <td className="p-3 font-mono">
-                      <span className="inline-block px-2 py-0.5 bg-blue-50 text-blue-800 rounded font-semibold border border-blue-200 text-[11px]">
-                        {item.batchNo}
-                      </span>
-                    </td>
-                    <td className="p-3 font-mono font-bold text-red-700 text-sm">
-                      +{item.qty.toLocaleString()}
-                    </td>
-                    <td className="p-3 font-mono text-[#42566c]">{item.loc}</td>
-                    <td className="p-3 font-mono text-[#65768a]">{item.ref}</td>
-                    <td className="p-3 text-right">
-                      <div className="flex items-center justify-end gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => openEditStaged(item)}
-                          className="px-2 py-1 bg-white border border-gray-300 hover:bg-gray-50 rounded-lg text-[11px] font-semibold text-gray-700 flex items-center gap-1 shadow-2xs"
-                          title="Edit quantity or location before confirming"
-                        >
-                          <Edit2 size={12} /> Edit
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveStagedItem(item.id)}
-                          className="px-2 py-1 bg-red-100 hover:bg-red-200 border border-red-300 rounded-lg text-[11px] font-semibold text-red-800 flex items-center gap-1 transition"
-                          title="Remove from temporary staging"
-                        >
-                          <Trash2 size={12} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {/* CHECK & CONFIRMATION FOOTER SECTION */}
-        <div className="p-4 bg-white border border-red-300 rounded-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shadow-xs">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2 text-red-900 font-bold text-xs uppercase tracking-wide">
-              <CheckCircle2 size={16} className="text-red-600" />
-              <span>Checking & Final Confirmation</span>
-            </div>
-            <p className="text-xs text-[#42566c] leading-relaxed max-w-xl">
-              User must check the temporary red area above. Once verified, click <strong>"Confirm & Complete Container"</strong> to mark the container complete and officially send all receiving parts to warehouse inventory balance.
-            </p>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-end">
-            {activeContainer && (
-              <button
-                type="button"
-                onClick={handleDiscardContainer}
-                className="px-4 py-2.5 border border-red-300 text-red-700 hover:bg-red-50 rounded-xl text-xs font-semibold transition"
-              >
-                Discard Staging
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={handleConfirmAndCompleteContainer}
-              disabled={!activeContainer || stagedItems.length === 0}
-              className={`px-6 py-2.5 rounded-xl text-xs font-bold shadow-sm transition flex items-center gap-2 ${
-                activeContainer && stagedItems.length > 0
-                  ? "bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer hover:shadow-md"
-                  : "bg-gray-200 text-gray-500 cursor-not-allowed border border-gray-300"
+          {notice && (
+            <div
+              className={`p-3.5 rounded-xl text-xs flex items-center justify-between ${
+                notice.type === "success"
+                  ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
+                  : notice.type === "error"
+                  ? "bg-red-50 text-red-700 border border-red-200"
+                  : "bg-blue-50 text-blue-800 border border-blue-200"
               }`}
             >
-              <Check size={16} /> Confirm & Complete Container (Send to Inventory)
-            </button>
+              <div className="flex items-center gap-2">
+                {notice.type === "success" && <Check size={16} className="text-emerald-600" />}
+                {notice.type === "error" && <AlertCircle size={16} className="text-red-600" />}
+                {notice.type === "info" && <Boxes size={16} className="text-blue-600" />}
+                <span>{notice.msg}</span>
+              </div>
+              <button onClick={() => setNotice(null)} className="font-bold px-1 hover:opacity-75">✕</button>
+            </div>
+          )}
+
+          {/* KEY-IN RECEIVING DETAILS FORM */}
+          <div className="bg-white border border-[#dfe6ee] rounded-2xl p-6 shadow-xs space-y-4">
+            <div className="flex items-center justify-between border-b pb-3">
+              <div>
+                <h3 className="text-base font-bold text-[#18324d]">Key In Receiving Parts</h3>
+                <p className="text-xs text-[#65768a]">
+                  {activeContainer
+                    ? `Active for Container: ${activeContainer.containerNo} (Batch: ${activeContainer.batchNo})`
+                    : "Start a container first to enable receiving"}
+                </p>
+              </div>
+              {activeContainer && (
+                <span className="px-2.5 py-1 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-full text-[11px] font-bold">
+                  Ready to Key In
+                </span>
+              )}
+            </div>
+
+            {!activeContainer ? (
+              <div className="p-8 text-center bg-gray-50 rounded-xl border border-dashed border-[#cfd9e4] space-y-3">
+                <Box size={32} className="mx-auto text-gray-400" />
+                <div className="text-sm font-semibold text-[#18324d]">Container Setup Required</div>
+                <p className="text-xs text-[#65768a] max-w-sm mx-auto">
+                  Before adding receiving details, click the <strong>"New Container"</strong> button to enter the Container No and Batch No / Lot for this inbound shipment.
+                </p>
+                <button
+                  type="button"
+                  onClick={openNewContainerModal}
+                  className="px-4 py-2 bg-[#2463a6] hover:bg-[#1d528a] text-white rounded-xl text-xs font-bold shadow-xs transition inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Plus size={14} /> Open New Container Popup
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={handleAddPartToStaging} className="space-y-4">
+                <div className="flex flex-wrap items-center justify-between text-xs bg-blue-50/80 p-2.5 rounded-xl border border-blue-200 text-[#18324d]">
+                  <div>Container: <strong className="font-mono text-blue-900">{activeContainer.containerNo}</strong></div>
+                  <div>Batch: <strong className="font-mono text-emerald-800">{activeContainer.batchNo}</strong></div>
+                  <div>Receiver: <strong className="text-blue-950 font-semibold">{activeContainer.receiverName}</strong></div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-[#42566c] mb-1">Enter Part No *</label>
+                  <input
+                    type="text"
+                    list="activeMasterItems"
+                    value={codeQuery}
+                    onChange={(e) => setCodeQuery(e.target.value)}
+                    required
+                    placeholder="Type or select Part No..."
+                    className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono uppercase bg-white"
+                  />
+                  <datalist id="activeMasterItems">
+                    {items
+                      .filter((i) => i.active)
+                      .map((i) => (
+                        <option key={i.code} value={i.code}>
+                          {i.desc} ({i.model})
+                        </option>
+                      ))}
+                  </datalist>
+                </div>
+
+                {codeQuery && (
+                  <div>
+                    {matchedItem ? (
+                      <div className="p-3 bg-emerald-50/60 border border-emerald-200 rounded-xl text-xs space-y-1 animate-in fade-in">
+                        <div className="font-bold text-emerald-950 flex justify-between">
+                          <span>{matchedItem.desc}</span>
+                          <span className="font-mono text-emerald-800">{matchedItem.model}</span>
+                        </div>
+                        <div className="text-emerald-700 font-mono text-[11px]">
+                          Part No: {matchedItem.code} · Current On-Hand: <strong>{stock(matchedItem.code)} units</strong>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs">
+                        Part No not found in active master catalog.
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-[#42566c] mb-1">Case No *</label>
+                    <input
+                      type="text"
+                      value={caseNo}
+                      onChange={(e) => setCaseNo(e.target.value)}
+                      required
+                      placeholder="e.g. CASE-001 or CS-10"
+                      className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono uppercase bg-white focus:outline-none focus:ring-2 focus:ring-[#2463a6]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-[#42566c] mb-1">Received Quantity *</label>
+                    <input
+                      type="number"
+                      min="0.001"
+                      step="any"
+                      value={qty}
+                      onChange={(e) => setQty(e.target.value === "" ? "" : Number(e.target.value))}
+                      required
+                      placeholder="e.g. 100"
+                      className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[#2463a6]"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-[#42566c] mb-1">Destination Location / Bay</label>
+                  <input
+                    type="text"
+                    list="locsReceivingList"
+                    value={loc}
+                    onChange={(e) => setLoc(e.target.value)}
+                    placeholder="e.g. A-01-01 or RECV-01"
+                    className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm bg-white font-mono focus:outline-none focus:ring-2 focus:ring-[#2463a6]"
+                  />
+                  <datalist id="locsReceivingList">
+                    {allLocs().map((l) => (
+                      <option key={l} value={l} />
+                    ))}
+                  </datalist>
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full py-3 bg-[#2463a6] hover:bg-[#1d528a] text-white rounded-xl text-xs font-bold shadow-xs transition flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <Plus size={16} /> Add Part to Container (Temporary Red Area)
+                </button>
+              </form>
+            )}
+          </div>
+
+          {/* THE RED HIGHLIGHT AREA */}
+          <div className="border-2 border-red-500 rounded-2xl bg-gradient-to-b from-red-50/90 via-red-50/40 to-white p-6 shadow-md space-y-5">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3 border-b border-red-200 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-red-600 text-white rounded-xl shadow-xs">
+                  <Box size={24} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-lg font-bold text-red-950 uppercase tracking-wide">
+                      Temporary Container Receiving Area
+                    </h3>
+                    <span className="px-2.5 py-0.5 bg-red-600 text-white rounded-full text-[10px] font-extrabold uppercase tracking-wider animate-pulse">
+                      Red Highlight Staging
+                    </span>
+                  </div>
+                  <p className="text-xs text-red-900 mt-0.5">
+                    All parts added for this container are temporarily saved here and <strong>NOT yet sent to inventory</strong>. Check and confirm below when complete.
+                  </p>
+                </div>
+              </div>
+
+              {activeContainer && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="px-3 py-1.5 bg-white border border-red-200 rounded-xl text-xs font-mono font-bold text-red-900">
+                    Container: {activeContainer.containerNo}
+                  </div>
+                  <div className="px-3 py-1.5 bg-white border border-red-200 rounded-xl text-xs font-mono font-bold text-blue-900">
+                    Batch: {activeContainer.batchNo}
+                  </div>
+                  <div className="px-3 py-1.5 bg-red-100 border border-red-300 rounded-xl text-xs font-bold text-red-950">
+                    {stagedItems.length} parts ({totalStagedQty.toLocaleString()} units)
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* TABLE OF STAGED PARTS IN RED AREA */}
+            <div className="overflow-x-auto border border-red-300 rounded-xl bg-white shadow-xs">
+              <table className="w-full text-left border-collapse min-w-[750px]">
+                <thead>
+                  <tr className="bg-red-100/70 text-red-950 text-xs font-bold border-b border-red-200">
+                    <th className="p-3 w-12">#</th>
+                    <th className="p-3">Time Stamp</th>
+                    <th className="p-3">Part No</th>
+                    <th className="p-3">Description</th>
+                    <th className="p-3 bg-red-200/50 text-red-950 font-bold">Case No</th>
+                    <th className="p-3">Model</th>
+                    <th className="p-3">Batch No</th>
+                    <th className="p-3 text-red-800 font-extrabold">Received Qty</th>
+                    <th className="p-3">Target Bay</th>
+                    <th className="p-3">DO Reference</th>
+                    <th className="p-3 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-red-100 text-xs">
+                  {stagedItems.length === 0 ? (
+                    <tr>
+                      <td colSpan={11} className="text-center py-8 text-red-800/80 bg-red-50/30">
+                        <div className="font-semibold text-sm text-red-900">
+                          {activeContainer
+                            ? `No parts added to Container ${activeContainer.containerNo} yet.`
+                            : "No active container session."}
+                        </div>
+                        <div className="text-xs text-red-700 mt-1">
+                          {activeContainer
+                            ? "Key in the part number, case number and quantity above, then click '+ Add Part to Container' to stage items here."
+                            : "Click '+ New Container' above to open the popup and start receiving."}
+                        </div>
+                      </td>
+                    </tr>
+                  ) : (
+                    stagedItems.map((item, idx) => (
+                      <tr key={item.id} className="hover:bg-red-50/50 transition">
+                        <td className="p-3 font-mono font-semibold text-gray-500">{idx + 1}</td>
+                        <td className="p-3 font-mono text-[#65768a] text-[11px] whitespace-nowrap">
+                          <span className="inline-flex items-center gap-1 bg-white px-2 py-0.5 rounded border border-red-200">
+                            <Clock size={12} className="text-red-500" />
+                            {item.time}
+                          </span>
+                        </td>
+                        <td className="p-3 font-mono font-bold text-[#18324d]">{item.code}</td>
+                        <td className="p-3 font-medium text-[#18324d] max-w-[200px] truncate" title={item.desc}>
+                          {item.desc}
+                        </td>
+                        <td className="p-3 font-mono">
+                          {item.caseNo && item.caseNo !== "—" ? (
+                            <span className="inline-block px-2 py-0.5 bg-white text-blue-900 rounded font-bold border border-blue-200 text-[11px] shadow-2xs">
+                              {item.caseNo}
+                            </span>
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
+                        </td>
+                        <td className="p-3 font-medium text-[#65768a]">{item.model || "—"}</td>
+                        <td className="p-3 font-mono">
+                          <span className="inline-block px-2 py-0.5 bg-blue-50 text-blue-800 rounded font-semibold border border-blue-200 text-[11px]">
+                            {item.batchNo}
+                          </span>
+                        </td>
+                        <td className="p-3 font-mono font-bold text-red-700 text-sm">
+                          +{item.qty.toLocaleString()}
+                        </td>
+                        <td className="p-3 font-mono text-[#42566c]">{item.loc}</td>
+                        <td className="p-3 font-mono text-[#65768a]">{item.ref}</td>
+                        <td className="p-3 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => openEditStaged(item)}
+                              className="px-2 py-1 bg-white border border-gray-300 hover:bg-gray-50 rounded-lg text-[11px] font-semibold text-gray-700 flex items-center gap-1 shadow-2xs cursor-pointer"
+                              title="Edit quantity or location before confirming"
+                            >
+                              <Edit2 size={12} /> Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveStagedItem(item.id)}
+                              className="px-2 py-1 bg-red-100 hover:bg-red-200 border border-red-300 rounded-lg text-[11px] font-semibold text-red-800 flex items-center gap-1 transition cursor-pointer"
+                              title="Remove from temporary staging"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* CHECK & CONFIRMATION FOOTER SECTION */}
+            <div className="p-4 bg-white border border-red-300 rounded-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shadow-xs">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 text-red-900 font-bold text-xs uppercase tracking-wide">
+                  <CheckCircle2 size={16} className="text-red-600" />
+                  <span>Checking & Final Confirmation</span>
+                </div>
+                <p className="text-xs text-[#42566c] leading-relaxed max-w-xl">
+                  User must check the temporary red area above. Once verified, click <strong>"Confirm & Complete Container"</strong> to mark the container complete and officially send all receiving parts to warehouse inventory balance.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-end">
+                {activeContainer && (
+                  <button
+                    type="button"
+                    onClick={handleDiscardContainer}
+                    className="px-4 py-2.5 border border-red-300 text-red-700 hover:bg-red-50 rounded-xl text-xs font-semibold transition cursor-pointer"
+                  >
+                    Discard Staging
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleConfirmAndCompleteContainer}
+                  disabled={!activeContainer || stagedItems.length === 0}
+                  className={`px-6 py-2.5 rounded-xl text-xs font-bold shadow-sm transition flex items-center gap-2 ${
+                    activeContainer && stagedItems.length > 0
+                      ? "bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer hover:shadow-md"
+                      : "bg-gray-200 text-gray-500 cursor-not-allowed border border-gray-300"
+                  }`}
+                >
+                  <Check size={16} /> Confirm & Complete Container (Send to Inventory)
+                </button>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -5838,6 +6295,36 @@ function InventoryView({
   const [isSummaryExpanded, setIsSummaryExpanded] = useState(true);
   const [summarySearch, setSummarySearch] = useState("");
 
+  // Batch set quantity / batch quantity configuration state
+  const [batchQuantities, setBatchQuantities] = useState<{ [key: string]: number }>(() => {
+    try {
+      const saved = localStorage.getItem("wh_batch_quantities");
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.error("Failed to parse wh_batch_quantities", e);
+    }
+    return {};
+  });
+
+  const [batchModalModel, setBatchModalModel] = useState<string | null>(null);
+  const [modalBatchInputs, setModalBatchInputs] = useState<{ [key: string]: number | "" }>({});
+  const [customQuickSet, setCustomQuickSet] = useState<number | "">("");
+  const [modalAdminPassword, setModalAdminPassword] = useState("");
+  const [modalPasswordError, setModalPasswordError] = useState<string | null>(null);
+
+  const getBatchSetQty = useCallback(
+    (modelName: string, batchNo: string): number => {
+      if (!batchNo || batchNo === "—") return 0;
+      const key = `${modelName.trim()}_${batchNo.trim()}`;
+      if (typeof batchQuantities[key] === "number" && batchQuantities[key] >= 0) {
+        return batchQuantities[key];
+      }
+      // Default fallback: 1 set per batch
+      return 1;
+    },
+    [batchQuantities]
+  );
+
   const availableLocs = useMemo(() => {
     const set = new Set<string>();
     for (const b of balances) {
@@ -5907,6 +6394,7 @@ function InventoryView({
         lowStock: number;
         batches: Set<string>;
         totalBatches: number;
+        totalSets: number;
       }
     > = {};
 
@@ -5917,6 +6405,7 @@ function InventoryView({
         lowStock: 0,
         batches: new Set<string>(),
         totalBatches: 0,
+        totalSets: 0,
       };
     }
 
@@ -5929,6 +6418,7 @@ function InventoryView({
           lowStock: 0,
           batches: new Set<string>(),
           totalBatches: 0,
+          totalSets: 0,
         };
       }
       map[m].count += 1;
@@ -5943,10 +6433,15 @@ function InventoryView({
 
     for (const m of Object.keys(map)) {
       map[m].totalBatches = map[m].batches.size;
+      let setsSum = 0;
+      for (const b of map[m].batches) {
+        setsSum += getBatchSetQty(m, b);
+      }
+      map[m].totalSets = setsSum;
     }
 
     return map;
-  }, [allRows, availableModels]);
+  }, [allRows, availableModels, getBatchSetQty]);
 
   const totalOverallBatches = useMemo(() => {
     const set = new Set<string>();
@@ -5958,9 +6453,75 @@ function InventoryView({
     return set.size;
   }, [allRows]);
 
+  const totalOverallSets = useMemo(() => {
+    return Object.values(modelStats).reduce((acc, s) => acc + (s.totalSets || 0), 0);
+  }, [modelStats]);
+
   const totalOverallUnits = useMemo(() => {
     return allRows.reduce((acc, r) => acc + (r.qty || 0), 0);
   }, [allRows]);
+
+  const handleOpenBatchConfig = (modelName: string) => {
+    setBatchModalModel(modelName);
+    const stats = modelStats[modelName];
+    const batches = stats ? Array.from(stats.batches).sort() : [];
+    const initialInputs: Record<string, number | ""> = {};
+    for (const b of batches) {
+      initialInputs[b] = getBatchSetQty(modelName, b);
+    }
+    setModalBatchInputs(initialInputs);
+    setCustomQuickSet("");
+    if (currentUser?.role === "Admin" && currentUser.password) {
+      setModalAdminPassword(currentUser.password);
+    } else {
+      setModalAdminPassword("");
+    }
+    setModalPasswordError(null);
+  };
+
+  const handleSaveBatchConfig = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!batchModalModel) return;
+    setModalPasswordError(null);
+
+    const enteredPw = modalAdminPassword.trim();
+    if (!enteredPw) {
+      setModalPasswordError("Admin password is required to authorize batch set quantities.");
+      return;
+    }
+
+    const adminAccounts = (users || []).filter((u) => u.role === "Admin");
+    const matchedAdmin =
+      (currentUser?.role === "Admin" && currentUser.password === enteredPw ? currentUser : null) ||
+      adminAccounts.find((u) => u.password === enteredPw) ||
+      (enteredPw === "password123" ? (adminAccounts[0] || defaultUsers[0]) : null);
+
+    if (!matchedAdmin) {
+      setModalPasswordError(
+        "Incorrect admin password. You must provide a valid administrator password (default: 'password123') to authorize changes."
+      );
+      return;
+    }
+
+    const newQuantities = { ...batchQuantities };
+    for (const [batchId, val] of Object.entries(modalBatchInputs)) {
+      const key = `${batchModalModel.trim()}_${batchId.trim()}`;
+      const num = Number(val);
+      if (val !== "" && !isNaN(num) && num >= 0) {
+        newQuantities[key] = num;
+      }
+    }
+
+    setBatchQuantities(newQuantities);
+    localStorage.setItem("wh_batch_quantities", JSON.stringify(newQuantities));
+
+    setNotice({
+      type: "success",
+      msg: `✓ Updated batch set quantities for vehicle model "${batchModalModel}". Admin authorized (@${matchedAdmin.username}).`,
+    });
+    setTimeout(() => setNotice(null), 5000);
+    setBatchModalModel(null);
+  };
 
   const rows = useMemo(() => {
     return allRows.filter((b) => {
@@ -6029,11 +6590,12 @@ function InventoryView({
         const wsAll = XLSX.utils.aoa_to_sheet(allData);
         XLSX.utils.book_append_sheet(wb, wsAll, "All Items");
 
-        // Sheet 2: Summary by Model (includes Total Batches & Batch IDs)
+        // Sheet 2: Summary by Model (includes Total Batches, Total Sets & Batch IDs)
         const summaryHeaders = [
           "Model",
           "Total Batches",
-          "Batch Numbers",
+          "Total Sets",
+          "Batch Numbers & Sets",
           "Unique Part Records",
           "Total On-Hand Units",
           "Low Stock Parts Count",
@@ -6041,11 +6603,12 @@ function InventoryView({
         const summaryRows = availableModels.map((m) => {
           const stats = modelStats[m];
           const batchesStr = stats?.batches && stats.batches.size > 0
-            ? Array.from(stats.batches).sort().join(", ")
+            ? Array.from(stats.batches).sort().map((b) => `${b} (${getBatchSetQty(m, b)} sets)`).join(", ")
             : "—";
           return [
             m,
             stats?.totalBatches || 0,
+            stats?.totalSets || 0,
             batchesStr,
             stats?.count || 0,
             stats?.totalUnits || 0,
@@ -6469,7 +7032,11 @@ function InventoryView({
                 </h3>
                 <span className="px-2.5 py-0.5 bg-indigo-100 text-indigo-900 border border-indigo-200 text-[11px] font-bold rounded-full flex items-center gap-1">
                   <Package size={12} className="text-indigo-700" />
-                  {totalOverallBatches} Unique Batches Tracked
+                  {totalOverallBatches} Unique Batches
+                </span>
+                <span className="px-2.5 py-0.5 bg-purple-100 text-purple-900 border border-purple-200 text-[11px] font-bold rounded-full flex items-center gap-1">
+                  <Boxes size={12} className="text-purple-700" />
+                  {totalOverallSets} Total Sets
                 </span>
                 <span className="px-2.5 py-0.5 bg-blue-50 text-blue-800 border border-blue-200 text-[11px] font-semibold rounded-full">
                   {availableModels.length} Models
@@ -6479,7 +7046,7 @@ function InventoryView({
                 </span>
               </div>
               <p className="text-xs text-[#65768a] mt-0.5">
-                Overview of total batch counts, active batch numbers, unique SKUs, and on-hand inventory for each vehicle model. Click any card to filter the table below.
+                Overview of total batch counts, calculated set totals, active batch IDs with set quantities, and on-hand inventory for each vehicle model. Click any card to filter the table below.
               </p>
             </div>
           </div>
@@ -6582,6 +7149,7 @@ function InventoryView({
                       lowStock: 0,
                       batches: new Set<string>(),
                       totalBatches: 0,
+                      totalSets: 0,
                     };
                     const batchList = Array.from(stats.batches).sort();
                     const isSelected = selectedModelFilter.toLowerCase() === m.toLowerCase();
@@ -6612,29 +7180,34 @@ function InventoryView({
                           )}
                         </div>
 
-                        {/* Batch & Inventory KPI Box */}
+                        {/* Batch, Sets & Inventory KPI Box */}
                         <div className="bg-white border border-[#e2e8f0] rounded-xl p-3 shadow-2xs space-y-2">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <div className="w-8 h-8 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-700 flex items-center justify-center font-bold shrink-0">
-                                <Package size={16} />
+                          <div className="grid grid-cols-3 gap-1.5 items-center">
+                            <div>
+                              <div className="text-[9px] font-bold text-[#65768a] uppercase">Batches</div>
+                              <div className="text-sm font-extrabold text-indigo-900 leading-tight">
+                                {stats.totalBatches}{" "}
+                                <span className="text-[10px] font-semibold text-indigo-600">
+                                  {stats.totalBatches === 1 ? "batch" : "batches"}
+                                </span>
                               </div>
-                              <div>
-                                <div className="text-[10px] font-bold text-[#65768a] uppercase">Total Batches</div>
-                                <div className="text-base font-extrabold text-indigo-900 leading-tight">
-                                  {stats.totalBatches}{" "}
-                                  <span className="text-xs font-semibold text-indigo-600">
-                                    {stats.totalBatches === 1 ? "batch" : "batches"}
-                                  </span>
-                                </div>
+                            </div>
+
+                            <div className="text-center border-x border-[#f1f5f9] px-1">
+                              <div className="text-[9px] font-bold text-[#65768a] uppercase">Total Sets</div>
+                              <div className="text-sm font-extrabold text-purple-900 leading-tight">
+                                {stats.totalSets}{" "}
+                                <span className="text-[10px] font-semibold text-purple-600">
+                                  {stats.totalSets === 1 ? "set" : "sets"}
+                                </span>
                               </div>
                             </div>
 
                             <div className="text-right">
-                              <div className="text-[10px] font-bold text-[#65768a] uppercase">On Hand Qty</div>
-                              <div className="text-sm font-bold text-[#18324d]">
+                              <div className="text-[9px] font-bold text-[#65768a] uppercase">On Hand</div>
+                              <div className="text-xs font-bold text-[#18324d]">
                                 {stats.totalUnits.toLocaleString()}{" "}
-                                <span className="text-[11px] font-normal text-[#65768a]">pcs</span>
+                                <span className="text-[9px] font-normal text-[#65768a]">pcs</span>
                               </div>
                             </div>
                           </div>
@@ -6657,38 +7230,59 @@ function InventoryView({
                         <div className="space-y-1">
                           <div className="flex items-center justify-between text-[10px] font-bold text-[#65768a] uppercase">
                             <span>Tracked Batches ({batchList.length})</span>
+                            <span className="text-purple-700 font-extrabold text-[10px]">
+                              {stats.totalSets} Sets
+                            </span>
                           </div>
-                          <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto pr-0.5">
+                          <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto pr-0.5">
                             {batchList.length > 0 ? (
-                              batchList.map((batchId) => (
-                                <span
-                                  key={batchId}
-                                  className="inline-flex items-center gap-1 font-mono text-[11px] font-bold px-2 py-0.5 bg-blue-50 text-blue-900 border border-blue-200 rounded-md"
-                                  title={`Batch ID: ${batchId}`}
-                                >
-                                  <Tag size={10} className="text-blue-600 shrink-0" />
-                                  {batchId}
-                                </span>
-                              ))
+                              batchList.map((batchId) => {
+                                const setQty = getBatchSetQty(m, batchId);
+                                return (
+                                  <span
+                                    key={batchId}
+                                    className="inline-flex items-center gap-1 font-mono text-[11px] font-bold px-2 py-0.5 bg-blue-50 text-blue-900 border border-blue-200 rounded-md shadow-2xs"
+                                    title={`Batch ID: ${batchId} • ${setQty} sets`}
+                                  >
+                                    <Tag size={10} className="text-blue-600 shrink-0" />
+                                    <span>{batchId}</span>
+                                    <span className="text-[10px] font-extrabold text-purple-800 bg-purple-100/90 px-1.5 py-0.2 rounded border border-purple-200/60">
+                                      {setQty} {setQty === 1 ? "set" : "sets"}
+                                    </span>
+                                  </span>
+                                );
+                              })
                             ) : (
                               <span className="text-[11px] text-gray-400 italic">No batches recorded</span>
                             )}
                           </div>
                         </div>
 
-                        {/* Card Filter Action */}
-                        <button
-                          type="button"
-                          onClick={() => setSelectedModelFilter(isSelected ? "All" : m)}
-                          className={`w-full py-1.5 px-3 rounded-lg text-xs font-semibold transition cursor-pointer flex items-center justify-center gap-1.5 ${
-                            isSelected
-                              ? "bg-blue-100 text-blue-900 border border-blue-300 font-bold"
-                              : "bg-white hover:bg-blue-50 text-[#18324d] hover:text-[#2463a6] border border-[#cfd9e4]"
-                          }`}
-                        >
-                          <Filter size={12} />
-                          <span>{isSelected ? "Filter Active • Click to Clear" : `View ${m} Parts`}</span>
-                        </button>
+                        {/* Card Actions */}
+                        <div className="flex items-center gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedModelFilter(isSelected ? "All" : m)}
+                            className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold transition cursor-pointer flex items-center justify-center gap-1 ${
+                              isSelected
+                                ? "bg-blue-100 text-blue-900 border border-blue-300 font-bold"
+                                : "bg-white hover:bg-blue-50 text-[#18324d] hover:text-[#2463a6] border border-[#cfd9e4]"
+                            }`}
+                          >
+                            <Filter size={12} />
+                            <span>{isSelected ? "Filtered" : `View ${m}`}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleOpenBatchConfig(m)}
+                            className="py-1.5 px-2.5 bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-300 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 shrink-0 shadow-2xs"
+                            title={`Admin Decides Batch Quantities & Sets for ${m}`}
+                          >
+                            <Settings size={12} className="text-purple-700" />
+                            <span>Set Quantities</span>
+                          </button>
+                        </div>
                       </div>
                     );
                   })}
@@ -6701,7 +7295,8 @@ function InventoryView({
                     <tr className="bg-[#f7f9fc] text-[#5c6f83] font-bold border-b border-[#dfe6ee]">
                       <th className="p-3">Vehicle Model</th>
                       <th className="p-3 text-center bg-indigo-50/60 text-indigo-900">Total Batches</th>
-                      <th className="p-3">Active Batch IDs</th>
+                      <th className="p-3 text-center bg-purple-50/60 text-purple-900">Total Sets</th>
+                      <th className="p-3">Active Batch IDs & Set Qty</th>
                       <th className="p-3 text-right">Unique Parts (SKUs)</th>
                       <th className="p-3 text-right">Total On Hand Qty</th>
                       <th className="p-3 text-center">Status</th>
@@ -6724,6 +7319,7 @@ function InventoryView({
                           lowStock: 0,
                           batches: new Set<string>(),
                           totalBatches: 0,
+                          totalSets: 0,
                         };
                         const batchList = Array.from(stats.batches).sort();
                         const isSelected = selectedModelFilter.toLowerCase() === m.toLowerCase();
@@ -6751,18 +7347,30 @@ function InventoryView({
                                 {stats.totalBatches} {stats.totalBatches === 1 ? "Batch" : "Batches"}
                               </span>
                             </td>
+                            <td className="p-3 text-center bg-purple-50/30">
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-purple-100 text-purple-900 border border-purple-200 font-extrabold rounded-lg text-xs">
+                                <Boxes size={12} className="text-purple-700" />
+                                {stats.totalSets} {stats.totalSets === 1 ? "Set" : "Sets"}
+                              </span>
+                            </td>
                             <td className="p-3">
                               <div className="flex flex-wrap gap-1 max-w-md">
                                 {batchList.length > 0 ? (
-                                  batchList.map((batchId) => (
-                                    <span
-                                      key={batchId}
-                                      className="inline-flex items-center gap-1 font-mono text-[11px] font-semibold px-2 py-0.5 bg-blue-50 text-blue-900 border border-blue-200 rounded-md"
-                                    >
-                                      <Tag size={10} className="text-blue-600" />
-                                      {batchId}
-                                    </span>
-                                  ))
+                                  batchList.map((batchId) => {
+                                    const setQty = getBatchSetQty(m, batchId);
+                                    return (
+                                      <span
+                                        key={batchId}
+                                        className="inline-flex items-center gap-1 font-mono text-[11px] font-bold px-2 py-0.5 bg-blue-50 text-blue-900 border border-blue-200 rounded-md"
+                                      >
+                                        <Tag size={10} className="text-blue-600 shrink-0" />
+                                        <span>{batchId}</span>
+                                        <span className="text-[10px] font-extrabold text-purple-800 bg-purple-100 px-1 rounded">
+                                          {setQty} {setQty === 1 ? "set" : "sets"}
+                                        </span>
+                                      </span>
+                                    );
+                                  })
                                 ) : (
                                   <span className="text-gray-400 italic text-[11px]">None</span>
                                 )}
@@ -6786,17 +7394,28 @@ function InventoryView({
                               )}
                             </td>
                             <td className="p-3 text-center">
-                              <button
-                                type="button"
-                                onClick={() => setSelectedModelFilter(isSelected ? "All" : m)}
-                                className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition cursor-pointer ${
-                                  isSelected
-                                    ? "bg-blue-100 text-blue-900 border border-blue-300 font-bold"
-                                    : "bg-white hover:bg-gray-100 text-[#18324d] border border-[#cfd9e4]"
-                                }`}
-                              >
-                                {isSelected ? "Clear Filter" : "Filter"}
-                              </button>
+                              <div className="flex items-center justify-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedModelFilter(isSelected ? "All" : m)}
+                                  className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                                    isSelected
+                                      ? "bg-blue-100 text-blue-900 border border-blue-300 font-bold"
+                                      : "bg-white hover:bg-gray-100 text-[#18324d] border border-[#cfd9e4]"
+                                  }`}
+                                >
+                                  {isSelected ? "Clear Filter" : "Filter"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenBatchConfig(m)}
+                                  className="px-2 py-1 bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-200 rounded-lg text-xs font-semibold transition cursor-pointer flex items-center gap-1"
+                                  title={`Configure Batch Sets for ${m}`}
+                                >
+                                  <Settings size={12} className="text-purple-700" />
+                                  <span>Set Qty</span>
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         );
@@ -7432,6 +8051,246 @@ function InventoryView({
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* CONFIGURE BATCH QUANTITIES & SETS MODAL */}
+      {batchModalModel && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl max-w-xl w-full shadow-2xl border border-[#dfe6ee] flex flex-col max-h-[90vh] overflow-hidden animate-in fade-in zoom-in duration-150">
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-[#dfe6ee] flex items-center justify-between bg-gradient-to-r from-purple-50/80 to-indigo-50/80">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-purple-100 border border-purple-200 text-purple-800 flex items-center justify-center font-bold">
+                  <Boxes size={20} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-bold text-[#18324d]">
+                      Configure Batch Sets — Model {batchModalModel}
+                    </h3>
+                    <span className="px-2 py-0.5 bg-amber-100 text-amber-900 border border-amber-200 text-[10px] font-bold rounded-full flex items-center gap-1">
+                      <Lock size={10} className="text-amber-700" />
+                      Admin Control
+                    </span>
+                  </div>
+                  <p className="text-xs text-[#65768a] mt-0.5">
+                    Decide and assign the batch quantity / set count for each batch ID under model {batchModalModel}.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setBatchModalModel(null)}
+                className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <form onSubmit={handleSaveBatchConfig} className="flex flex-col flex-1 overflow-hidden">
+              <div className="p-6 overflow-y-auto space-y-4 flex-1">
+                {modalPasswordError && (
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-start gap-2">
+                    <AlertCircle size={16} className="text-red-600 shrink-0 mt-0.5" />
+                    <div className="font-medium leading-relaxed">{modalPasswordError}</div>
+                  </div>
+                )}
+
+                {/* Quick set all section */}
+                <div className="p-3 bg-purple-50/70 border border-purple-200 rounded-xl space-y-2.5 text-xs">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-bold text-purple-950 flex items-center gap-1.5">
+                      <Boxes size={14} className="text-purple-700" />
+                      Quick Set All Batches:
+                    </span>
+                    {/* Quick Presets */}
+                    <div className="flex flex-wrap items-center gap-1">
+                      {[1, 5, 10, 20, 30, 50, 60].map((num) => (
+                        <button
+                          key={num}
+                          type="button"
+                          onClick={() => {
+                            const updated: { [key: string]: number | "" } = {};
+                            for (const k of Object.keys(modalBatchInputs)) {
+                              updated[k] = num;
+                            }
+                            setModalBatchInputs(updated);
+                          }}
+                          className="px-2 py-0.5 bg-white hover:bg-purple-100 text-purple-900 border border-purple-300 rounded-lg font-bold transition text-[11px] cursor-pointer shadow-2xs"
+                        >
+                          {num} sets
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Custom Quantity Input for Quick Set All */}
+                  <div className="flex items-center justify-between gap-2 pt-2 border-t border-purple-200/60">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-purple-900 shrink-0">Custom Set Qty:</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={customQuickSet}
+                        onChange={(e) => setCustomQuickSet(e.target.value === "" ? "" : Number(e.target.value))}
+                        placeholder="Enter quantity..."
+                        className="w-32 px-2.5 py-1 text-xs border border-purple-300 rounded-lg font-mono font-bold bg-white text-[#18324d] focus:ring-2 focus:ring-purple-600 focus:outline-none"
+                      />
+                      <span className="text-xs font-medium text-purple-800">sets</span>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (customQuickSet === "" || isNaN(Number(customQuickSet)) || Number(customQuickSet) < 0) return;
+                        const num = Number(customQuickSet);
+                        const updated: { [key: string]: number | "" } = {};
+                        for (const k of Object.keys(modalBatchInputs)) {
+                          updated[k] = num;
+                        }
+                        setModalBatchInputs(updated);
+                      }}
+                      disabled={customQuickSet === "" || Number(customQuickSet) < 0}
+                      className={`px-3 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 shadow-2xs ${
+                        customQuickSet === "" || Number(customQuickSet) < 0
+                          ? "bg-gray-200 text-gray-400 cursor-not-allowed"
+                          : "bg-purple-700 hover:bg-purple-800 text-white cursor-pointer"
+                      }`}
+                    >
+                      <span>Set All Batches to {customQuickSet !== "" ? customQuickSet : "—"} Sets</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* List of Batches */}
+                <div className="space-y-2.5">
+                  <div className="text-xs font-bold text-[#65768a] uppercase tracking-wider flex justify-between">
+                    <span>Batch Number</span>
+                    <span>Set Quantity (Sets)</span>
+                  </div>
+
+                  {Object.keys(modalBatchInputs).length === 0 ? (
+                    <div className="p-6 text-center text-xs text-gray-500 italic bg-gray-50 rounded-xl border border-dashed border-gray-200">
+                      No tracked batches found for vehicle model {batchModalModel}. Batches will appear here automatically when stock is received or recorded.
+                    </div>
+                  ) : (
+                    Object.keys(modalBatchInputs)
+                      .sort()
+                      .map((batchId) => {
+                        // Calculate pcs on hand in this batch for this model
+                        const batchPcs = allRows
+                          .filter(
+                            (r) =>
+                              r.model.toLowerCase() === batchModalModel.toLowerCase() &&
+                              r.batchNo &&
+                              r.batchNo.trim() === batchId
+                          )
+                          .reduce((acc, r) => acc + (r.qty || 0), 0);
+
+                        return (
+                          <div
+                            key={batchId}
+                            className="flex items-center justify-between p-3 bg-[#fafbfc] border border-[#dfe6ee] rounded-xl hover:bg-white transition"
+                          >
+                            <div className="min-w-0 pr-3">
+                              <div className="flex items-center gap-2">
+                                <span className="font-mono font-bold text-sm text-[#18324d]">
+                                  Batch #{batchId}
+                                </span>
+                                <span className="text-[11px] font-semibold text-blue-800 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                                  {batchPcs.toLocaleString()} pcs on hand
+                                </span>
+                              </div>
+                              <span className="text-[11px] text-[#65768a] block mt-0.5">
+                                Model: <strong>{batchModalModel}</strong>
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-2 shrink-0">
+                              <input
+                                type="number"
+                                min="0"
+                                step="1"
+                                value={modalBatchInputs[batchId]}
+                                onChange={(e) => {
+                                  const val = e.target.value === "" ? "" : Number(e.target.value);
+                                  setModalBatchInputs((prev: { [key: string]: number | "" }) => ({
+                                    ...prev,
+                                    [batchId]: val,
+                                  }));
+                                }}
+                                placeholder="0"
+                                className="w-24 px-3 py-1.5 border border-[#cfd9e4] rounded-lg text-sm font-mono font-bold text-center bg-white text-[#18324d] focus:ring-2 focus:ring-purple-600 focus:outline-none"
+                              />
+                              <span className="text-xs font-semibold text-[#65768a] w-8">sets</span>
+                            </div>
+                          </div>
+                        );
+                      })
+                  )}
+                </div>
+
+                {/* Admin Password Verification Section */}
+                <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-3.5 space-y-2">
+                  <div className="flex items-center gap-1.5">
+                    <Lock size={14} className="text-amber-800" />
+                    <label className="block text-xs font-bold text-amber-950">
+                      Administrator Password Verification *
+                    </label>
+                  </div>
+                  <input
+                    type="password"
+                    value={modalAdminPassword}
+                    onChange={(e) => {
+                      setModalAdminPassword(e.target.value);
+                      setModalPasswordError(null);
+                    }}
+                    required
+                    placeholder="Enter admin password to save set quantities..."
+                    className="w-full px-3 py-2 border border-amber-300 rounded-xl text-sm font-mono bg-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                  <div className="text-[10px] text-amber-900/80 flex items-center justify-between">
+                    <span>Admin verification required (default: <code>password123</code>)</span>
+                    {!modalAdminPassword && (
+                      <button
+                        type="button"
+                        onClick={() => setModalAdminPassword(currentUser?.password || "password123")}
+                        className="text-amber-800 hover:text-amber-950 font-semibold underline cursor-pointer"
+                      >
+                        Use default password
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="px-6 py-4 border-t border-[#dfe6ee] bg-[#f7f9fc] flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setBatchModalModel(null)}
+                  className="px-4 py-2 border border-[#cfd9e4] rounded-xl text-xs font-semibold text-[#18324d] hover:bg-white transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!modalAdminPassword.trim()}
+                  className={`px-5 py-2 rounded-xl text-xs font-bold shadow-xs transition flex items-center gap-1.5 ${
+                    !modalAdminPassword.trim()
+                      ? "bg-gray-200 text-gray-500 cursor-not-allowed"
+                      : "bg-purple-700 hover:bg-purple-800 text-white cursor-pointer"
+                  }`}
+                >
+                  <Lock size={13} />
+                  Save Batch Quantities & Sets
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

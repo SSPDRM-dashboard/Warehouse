@@ -151,6 +151,9 @@ export interface Balance {
   caseNo?: string; // Case No / Packing Case ID
   timestamp?: string; // Last updated timestamp
   updatedAt?: string; // Timestamp
+  isEdited?: boolean; // Flag if balance has been modified by admin
+  editedAt?: string; // Timestamp of modification
+  editedBy?: string; // Username of authorizing admin
 }
 
 export type Transaction = {

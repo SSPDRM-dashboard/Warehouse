@@ -213,7 +213,7 @@ export function DailyReportsView({
       "Quantity Received",
       "Destination Bin",
       "DO / Supplier Reference",
-      "Receiver Name",
+      "Received By (Who)",
       "System User / Operator",
       "Status"
     ];
@@ -257,7 +257,7 @@ export function DailyReportsView({
       "Storage Location",
       "Delivery Order / Batch Ref",
       "Unpacked By (Name)",
-      "Received By (Name)",
+      "Received By (Who)",
       "Inspection / Status"
     ];
 
@@ -299,7 +299,7 @@ export function DailyReportsView({
       "Destination Line",
       "Production Ref / WO No",
       "Issued By (Name / User)",
-      "Receiver / Line Contact",
+      "Received By (Who)",
       "Status"
     ];
 
@@ -737,7 +737,7 @@ export function DailyReportsView({
                     <th className="p-3">Qty Received</th>
                     <th className="p-3">Destination Bin</th>
                     <th className="p-3">DO / Ref</th>
-                    <th className="p-3 bg-emerald-50/70 text-emerald-900">Receiver Name</th>
+                    <th className="p-3 bg-emerald-50/70 text-emerald-900 font-bold">Received By (Who)</th>
                     <th className="p-3">User</th>
                     <th className="p-3">Status</th>
                   </tr>
@@ -823,7 +823,10 @@ export function DailyReportsView({
                         <td className="p-3 font-mono text-[#42566c]">{t.dest}</td>
                         <td className="p-3 font-mono font-medium">{t.ref}</td>
                         <td className="p-3 bg-emerald-50/40 font-semibold text-emerald-950">
-                          {t.receiverName || t.user}
+                          <div className="flex items-center gap-1.5">
+                            <User size={13} className="text-emerald-700 flex-shrink-0" />
+                            <span>{t.receiverName || t.user || "—"}</span>
+                          </div>
                         </td>
                         <td className="p-3 text-[#65768a]">{t.user}</td>
                         <td className="p-3">
@@ -870,7 +873,7 @@ export function DailyReportsView({
                     <th className="p-3">Storage Bin</th>
                     <th className="p-3">Source DO / Ref</th>
                     <th className="p-3 bg-blue-50/70 text-blue-900">Unpacked By (Name)</th>
-                    <th className="p-3">Receiver Name</th>
+                    <th className="p-3 bg-emerald-50/70 text-emerald-900 font-bold">Received By (Who)</th>
                     <th className="p-3">Inspection Status</th>
                   </tr>
                 </thead>
@@ -923,7 +926,12 @@ export function DailyReportsView({
                         <td className="p-3 bg-blue-50/40 font-semibold text-blue-950">
                           {t.unpackedByName || t.receiverName || t.user}
                         </td>
-                        <td className="p-3 text-[#65768a]">{t.receiverName || t.user}</td>
+                        <td className="p-3 bg-emerald-50/40 font-semibold text-emerald-950">
+                          <div className="flex items-center gap-1.5">
+                            <User size={13} className="text-emerald-700 flex-shrink-0" />
+                            <span>{t.receiverName || t.user || "—"}</span>
+                          </div>
+                        </td>
                         <td className="p-3">
                           <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-800">
                             Unpacked & Verified
@@ -969,13 +977,14 @@ export function DailyReportsView({
                     <th className="p-3 bg-amber-50/70 text-amber-900">Destination Line</th>
                     <th className="p-3">Production WO / Ref</th>
                     <th className="p-3">Issued By</th>
+                    <th className="p-3 bg-emerald-50/70 text-emerald-900 font-bold">Received By (Who)</th>
                     <th className="p-3">Status</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#e9eef3] text-xs">
                   {applySearch(prod1Tx).length === 0 ? (
                     <tr>
-                      <td colSpan={12} className="text-center py-6 text-[#65768a]">
+                      <td colSpan={13} className="text-center py-6 text-[#65768a]">
                         No parts issued to Production Line 1 for {selectedDate === "all" ? "the system" : selectedDate}.
                       </td>
                     </tr>
@@ -1022,6 +1031,12 @@ export function DailyReportsView({
                         </td>
                         <td className="p-3 font-mono font-medium">{t.ref}</td>
                         <td className="p-3 text-[#42566c]">{t.user}</td>
+                        <td className="p-3 bg-emerald-50/40 font-semibold text-emerald-950">
+                          <div className="flex items-center gap-1.5">
+                            <User size={13} className="text-emerald-700 flex-shrink-0" />
+                            <span>{t.receiverName || "Production Line 1 Operator"}</span>
+                          </div>
+                        </td>
                         <td className="p-3">
                           <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800">
                             {t.status}

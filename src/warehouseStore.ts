@@ -73,11 +73,73 @@ export function cleanForFirestore<T>(data: T): any {
   return removeUndefined(parsed);
 }
 
+const QUOTA_STORAGE_KEY = "wh_firestore_quota_date";
+let _firestoreQuotaExceeded = false;
+
+export function isFirestoreQuotaExceeded(): boolean {
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    return localStorage.getItem(QUOTA_STORAGE_KEY) === today || _firestoreQuotaExceeded;
+  } catch {
+    return _firestoreQuotaExceeded;
+  }
+}
+
+export function setFirestoreQuotaExceeded(val: boolean) {
+  _firestoreQuotaExceeded = val;
+  try {
+    if (val) {
+      const today = new Date().toISOString().slice(0, 10);
+      localStorage.setItem(QUOTA_STORAGE_KEY, today);
+    } else {
+      localStorage.removeItem(QUOTA_STORAGE_KEY);
+    }
+  } catch {}
+}
+
+export function resetQuotaCache() {
+  _firestoreQuotaExceeded = false;
+  try {
+    localStorage.removeItem(QUOTA_STORAGE_KEY);
+  } catch {}
+}
+
 // Subscribes to real-time warehouse data changes from Firestore
 export function subscribeToWarehouseState(
   onData: (data: WarehouseStateData) => void,
   onError?: (err: unknown) => void
 ): () => void {
+  // If quota was already exceeded today, skip Firestore network calls to prevent failing requests
+  if (isFirestoreQuotaExceeded()) {
+    console.info("Firestore daily quota is currently reached. Operating in Local Storage mode.");
+    try {
+      const localItems = localStorage.getItem("wh_items");
+      const localBalances = localStorage.getItem("wh_balances");
+      const localTransactions = localStorage.getItem("wh_transactions");
+      const localUsers = localStorage.getItem("wh_users");
+      onData({
+        items: localItems ? JSON.parse(localItems) : seedItems,
+        balances: localBalances ? JSON.parse(localBalances) : initialBalances,
+        transactions: localTransactions ? JSON.parse(localTransactions) : initialTransactions,
+        users: localUsers ? JSON.parse(localUsers) : defaultUsers,
+        updatedAt: new Date().toISOString(),
+        sourceDevice: "Local Storage Mode",
+        version: 1,
+      });
+    } catch {
+      onData({
+        items: seedItems,
+        balances: initialBalances,
+        transactions: initialTransactions,
+        users: defaultUsers,
+        updatedAt: new Date().toISOString(),
+        sourceDevice: "Local Storage Mode (Default)",
+        version: 1,
+      });
+    }
+    return () => {};
+  }
+
   const docRef = doc(db, STATE_COLLECTION, STATE_DOC);
 
   // Test connection on startup
@@ -127,14 +189,42 @@ export function subscribeToWarehouseState(
           onData(initialData);
         }
       } catch (err) {
-        console.error("Error processing warehouse snapshot:", err);
+        console.warn("Error processing warehouse snapshot:", err);
         if (onError) onError(err);
       }
     },
     (error) => {
-      console.error("Firestore onSnapshot error:", error);
-      handleFirestoreError(error, OperationType.GET, `${STATE_COLLECTION}/${STATE_DOC}`);
-      if (onError) onError(error);
+      const isQuota =
+        error instanceof Error &&
+        (error.message.includes("Quota exceeded") || (error as any).code === "resource-exhausted");
+
+      if (isQuota) {
+        setFirestoreQuotaExceeded(true);
+        console.warn("Firestore usage quota exceeded. Operating seamlessly in offline localStorage mode.");
+
+        // Fallback: load latest local backup immediately so the UI is fully populated
+        try {
+          const localItems = localStorage.getItem("wh_items");
+          const localBalances = localStorage.getItem("wh_balances");
+          const localTransactions = localStorage.getItem("wh_transactions");
+          const localUsers = localStorage.getItem("wh_users");
+          onData({
+            items: localItems ? JSON.parse(localItems) : seedItems,
+            balances: localBalances ? JSON.parse(localBalances) : initialBalances,
+            transactions: localTransactions ? JSON.parse(localTransactions) : initialTransactions,
+            users: localUsers ? JSON.parse(localUsers) : defaultUsers,
+            updatedAt: new Date().toISOString(),
+            sourceDevice: "Local Storage Mode",
+            version: 1,
+          });
+        } catch (e) {
+          console.warn("Failed reading offline localStorage backup:", e);
+        }
+      } else {
+        console.error("Firestore onSnapshot error:", error);
+        handleFirestoreError(error, OperationType.GET, `${STATE_COLLECTION}/${STATE_DOC}`);
+        if (onError) onError(error);
+      }
     }
   );
 
@@ -148,6 +238,21 @@ export async function pushWarehouseStateToCloud(
   transactions: Transaction[],
   users: UserAccount[]
 ): Promise<void> {
+  // Always save to localStorage first so local operations are never blocked
+  try {
+    localStorage.setItem("wh_items", JSON.stringify(items));
+    localStorage.setItem("wh_balances", JSON.stringify(balances));
+    localStorage.setItem("wh_transactions", JSON.stringify(transactions));
+    localStorage.setItem("wh_users", JSON.stringify(users));
+  } catch {
+    // ignore quota issues
+  }
+
+  // If quota was already marked exceeded, avoid spamming rejected network calls
+  if (isFirestoreQuotaExceeded()) {
+    return;
+  }
+
   const docRef = doc(db, STATE_COLLECTION, STATE_DOC);
   const payload: WarehouseStateData = {
     items,
@@ -159,20 +264,19 @@ export async function pushWarehouseStateToCloud(
     version: Date.now(),
   };
 
-  // Always save to localStorage first so local operations are never blocked
-  try {
-    localStorage.setItem("wh_items", JSON.stringify(items));
-    localStorage.setItem("wh_balances", JSON.stringify(balances));
-    localStorage.setItem("wh_transactions", JSON.stringify(transactions));
-    localStorage.setItem("wh_users", JSON.stringify(users));
-  } catch {
-    // ignore quota issues
-  }
-
   try {
     const firestoreData = cleanForFirestore(payload);
     await setDoc(docRef, firestoreData);
   } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, `${STATE_COLLECTION}/${STATE_DOC}`);
+    const isQuota =
+      error instanceof Error &&
+      (error.message.includes("Quota exceeded") || (error as any).code === "resource-exhausted");
+
+    if (isQuota) {
+      setFirestoreQuotaExceeded(true);
+      console.warn("Firestore write quota reached. Local copy preserved safely in Local Storage.");
+    } else {
+      handleFirestoreError(error, OperationType.WRITE, `${STATE_COLLECTION}/${STATE_DOC}`);
+    }
   }
 }

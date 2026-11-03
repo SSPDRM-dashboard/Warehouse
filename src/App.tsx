@@ -46,6 +46,8 @@ import {
   Filter,
   Tag,
   Settings,
+  ArrowUpDown,
+  Info,
 } from "lucide-react";
 import {
   Item,
@@ -62,7 +64,7 @@ import { defaultUsers } from "./defaultUsers";
 import { seedItems, initialBalances, initialTransactions } from "./mockData";
 import { SyncBackupModal } from "./SyncBackupModal";
 import { DailyReportsView } from "./DailyReportsView";
-import { subscribeToWarehouseState, pushWarehouseStateToCloud } from "./warehouseStore";
+import { subscribeToWarehouseState, pushWarehouseStateToCloud, isFirestoreQuotaExceeded } from "./warehouseStore";
 import { LoginView } from "./LoginView";
 import { SettingsView } from "./SettingsView";
 import { SendToVAView } from "./SendToVAView";
@@ -275,6 +277,7 @@ export default function App() {
   const isRemoteUpdate = useRef(false);
   const isInitialCloudSyncDone = useRef(false);
   const lastSyncedJson = useRef("");
+  const [isQuotaExceededWarning, setIsQuotaExceededWarning] = useState(() => isFirestoreQuotaExceeded());
 
   useEffect(() => {
     // If cloud response is delayed or offline, enable local sync after 1.5 seconds
@@ -304,7 +307,12 @@ export default function App() {
       (err) => {
         clearTimeout(fallbackTimer);
         isInitialCloudSyncDone.current = true;
-        console.error("Cloud sync error:", err);
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("Quota exceeded") || (err as any)?.code === "resource-exhausted") {
+          setIsQuotaExceededWarning(true);
+        } else {
+          console.error("Cloud sync error:", err);
+        }
       }
     );
     return () => {
@@ -559,10 +567,20 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-3 flex-wrap">
-            <div className="hidden xl:flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-xs font-medium">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span>Live Sync Active</span>
-            </div>
+            {isQuotaExceededWarning ? (
+              <div
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 border border-amber-300 text-amber-900 rounded-lg text-xs font-semibold shadow-2xs"
+                title="Firestore daily free tier quota reached. Data is safely stored in local browser storage and will sync automatically once quota resets tomorrow."
+              >
+                <AlertTriangle size={13} className="text-amber-600 shrink-0" />
+                <span>Local Storage Mode (Cloud Quota Reset Tomorrow)</span>
+              </div>
+            ) : (
+              <div className="hidden xl:flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-xs font-medium">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span>Live Sync Active</span>
+              </div>
+            )}
 
             <button
               onClick={() => setIsSyncModalOpen(true)}
@@ -634,7 +652,48 @@ export default function App() {
           </div>
         </header>
 
-        <div className="p-6 max-w-[1400px] w-full mx-auto flex-1">
+        <div className="p-6 max-w-[1400px] w-full mx-auto flex-1 space-y-4">
+          {isQuotaExceededWarning && (
+            <div className="bg-amber-50 border border-amber-300 text-amber-950 p-3.5 rounded-2xl flex items-center justify-between text-xs gap-3 shadow-2xs">
+              <div className="flex items-start gap-2.5">
+                <AlertTriangle size={16} className="text-amber-600 mt-0.5 shrink-0" />
+                <div>
+                  <p className="font-bold text-amber-950">
+                    Operating in Local Storage Mode (Cloud Firestore Daily Quota Reached)
+                  </p>
+                  <p className="text-amber-800 mt-0.5 leading-relaxed">
+                    The free Spark plan has daily limits (50,000 reads and 20,000 writes/day), which resets daily at midnight PST. All inventory items, batches, receiving transactions, and catalog edits remain 100% functional and are safely saved in local storage.
+                  </p>
+                  <div className="mt-1.5 flex items-center gap-3">
+                    <a
+                      href="https://console.firebase.google.com/project/gen-lang-client-0854843540/firestore/databases/ai-studio-warehouseosinven-1fe2a63b-176f-4156-b26b-f21e50145268/data?openUpgradeDialog=true"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-bold text-[#1a5695] underline hover:text-[#123e6b]"
+                    >
+                      Upgrade Firebase Plan (Blaze Pay-as-you-go) &rarr;
+                    </a>
+                    <a
+                      href="https://firebase.google.com/pricing#cloud-firestore"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-amber-900 underline hover:text-black"
+                    >
+                      Pricing details
+                    </a>
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsQuotaExceededWarning(false)}
+                className="text-amber-800 hover:text-amber-950 font-bold px-2 py-1 hover:bg-amber-100 rounded-lg cursor-pointer shrink-0"
+                title="Dismiss message"
+              >
+                ✕
+              </button>
+            </div>
+          )}
           {!isPanelAllowed(page) && (
             <div className="p-8 bg-white border border-[#dfe6ee] rounded-2xl text-center space-y-4 max-w-lg mx-auto my-12 shadow-xs">
               <div className="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center mx-auto">
@@ -6287,6 +6346,10 @@ function InventoryView({
   const [customReason, setCustomReason] = useState("");
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [showZeroStock, setShowZeroStock] = useState(false);
+  const [showEditedOnly, setShowEditedOnly] = useState(false);
+  const [sortOption, setSortOption] = useState<
+    "default" | "edited_only" | "edited_first" | "qty_desc" | "qty_asc" | "part_asc" | "batch_asc" | "loc_asc"
+  >("default");
 
   // Model filter, view mode & download state
   const [selectedModelFilter, setSelectedModelFilter] = useState("All");
@@ -6314,6 +6377,28 @@ function InventoryView({
   const [renamedBatchValue, setRenamedBatchValue] = useState("");
   const [modalAdminPassword, setModalAdminPassword] = useState("");
   const [modalPasswordError, setModalPasswordError] = useState<string | null>(null);
+
+  // Deleting batch state & confirmation
+  const [batchToDelete, setBatchToDelete] = useState<{
+    model: string;
+    batchId: string;
+    pcs: number;
+    count: number;
+  } | null>(null);
+  const [deleteAdminPassword, setDeleteAdminPassword] = useState("");
+  const [deletePasswordError, setDeletePasswordError] = useState<string | null>(null);
+
+  // Bulk batch stock quantity editing
+  const [batchQtyAdjustTarget, setBatchQtyAdjustTarget] = useState<{
+    model: string;
+    batchId: string;
+    currentPcs: number;
+    count: number;
+  } | null>(null);
+  const [batchQtyAdjustMode, setBatchQtyAdjustMode] = useState<"set_all" | "delta">("set_all");
+  const [batchQtyAdjustValue, setBatchQtyAdjustValue] = useState<number | "">("");
+  const [batchQtyAdjustPassword, setBatchQtyAdjustPassword] = useState("");
+  const [batchQtyAdjustError, setBatchQtyAdjustError] = useState<string | null>(null);
 
   const getBatchSetQty = useCallback(
     (modelName: string, batchNo: string): number => {
@@ -6353,6 +6438,16 @@ function InventoryView({
   }, [balances]);
 
   const allRows = useMemo(() => {
+    // Build set of codes that have adjustment transactions
+    const adjustedCodes = new Set<string>();
+    if (transactions) {
+      for (const t of transactions) {
+        if (t.type === "Adjustment" && t.code) {
+          adjustedCodes.add(t.code.trim().toUpperCase());
+        }
+      }
+    }
+
     return balances
       .filter((b) => (showZeroStock ? true : b.qty > 0))
       .map((b) => {
@@ -6361,6 +6456,11 @@ function InventoryView({
           min: 0,
           model: "—",
         };
+        const isEdited = Boolean(
+          b.isEdited ||
+          b.editedAt ||
+          adjustedCodes.has(b.code.trim().toUpperCase())
+        );
         return {
           ...b,
           desc: i.desc,
@@ -6369,9 +6469,16 @@ function InventoryView({
           caseNo: b.caseNo && b.caseNo.trim() ? b.caseNo.trim() : "—",
           batchNo: b.batchNo && b.batchNo.trim() ? b.batchNo.trim() : "—",
           timestamp: b.timestamp || b.updatedAt || "—",
+          isEdited,
+          editedAt: b.editedAt,
+          editedBy: b.editedBy,
         };
       });
-  }, [balances, items, showZeroStock]);
+  }, [balances, items, showZeroStock, transactions]);
+
+  const editedCount = useMemo(() => {
+    return allRows.filter((r) => r.isEdited).length;
+  }, [allRows]);
 
   const availableModels = useMemo(() => {
     const set = new Set<string>();
@@ -6534,6 +6641,9 @@ function InventoryView({
           batchNo: cleanNew,
           updatedAt: timeNow,
           timestamp: timeNow,
+          isEdited: true,
+          editedAt: timeNow,
+          editedBy: matchedAdmin.username,
         };
       }
       return b;
@@ -6648,8 +6758,250 @@ function InventoryView({
     setBatchModalModel(null);
   };
 
+  const handlePromptDeleteBatch = (modelName: string, batchId: string) => {
+    const matching = allRows.filter(
+      (r) =>
+        r.model.toLowerCase() === modelName.toLowerCase() &&
+        r.batchNo &&
+        cleanVal(r.batchNo) === cleanVal(batchId)
+    );
+    const totalPcs = matching.reduce((acc, r) => acc + (r.qty || 0), 0);
+    setBatchToDelete({
+      model: modelName,
+      batchId: cleanVal(batchId),
+      pcs: totalPcs,
+      count: matching.length,
+    });
+    setDeleteAdminPassword(
+      currentUser?.role === "Admin" && currentUser.password ? currentUser.password : ""
+    );
+    setDeletePasswordError(null);
+  };
+
+  const handleConfirmDeleteBatch = () => {
+    if (!batchToDelete) return;
+    const { model: modelName, batchId, pcs: deletedUnits, count: deletedCount } = batchToDelete;
+
+    const enteredPw = deleteAdminPassword.trim();
+    if (!enteredPw) {
+      setDeletePasswordError("Admin password is required to authorize deleting this batch.");
+      return;
+    }
+
+    const adminAccounts = (users || []).filter((u) => u.role === "Admin");
+    const matchedAdmin =
+      (currentUser?.role === "Admin" && currentUser.password === enteredPw ? currentUser : null) ||
+      adminAccounts.find((u) => u.password === enteredPw) ||
+      (enteredPw === "password123" ? (adminAccounts[0] || defaultUsers[0]) : null);
+
+    if (!matchedAdmin) {
+      setDeletePasswordError(
+        "Incorrect admin password. You must provide a valid administrator password (default: 'password123') to authorize deleting batches."
+      );
+      return;
+    }
+
+    const timeNow = formatTimestamp();
+
+    // Remove matching balance records from inventory
+    const updatedBalances = balances.filter((b) => {
+      const item = items.find((x) => x.code.trim().toUpperCase() === b.code.trim().toUpperCase());
+      const itemModel = item?.model && item.model.trim() ? item.model.trim() : "—";
+      const matchesModel =
+        itemModel.toLowerCase() === modelName.toLowerCase() ||
+        (b.batchNo && cleanVal(b.batchNo) === cleanVal(batchId));
+
+      if (cleanVal(b.batchNo) === cleanVal(batchId) && matchesModel) {
+        return false; // delete this balance record
+      }
+      return true;
+    });
+
+    setBalances(updatedBalances);
+
+    // Remove from batchQuantities config
+    const batchKey = `${modelName.trim()}_${batchId.trim()}`;
+    const nextBatchQuantities = { ...batchQuantities };
+    delete nextBatchQuantities[batchKey];
+    setBatchQuantities(nextBatchQuantities);
+    localStorage.setItem("wh_batch_quantities", JSON.stringify(nextBatchQuantities));
+
+    // Update modalBatchInputs if batch config modal is open
+    setModalBatchInputs((prev) => {
+      const next = { ...prev };
+      delete next[batchId];
+      return next;
+    });
+
+    // Create Audit Transaction
+    const deleteTx: Transaction = {
+      id: txNo("BAT-DEL"),
+      type: "Adjustment",
+      code: `BATCH-${batchId}`,
+      partName: `Batch Deleted: #${batchId}`,
+      desc: `Vehicle Model ${modelName}: Deleted Batch #${batchId} (${deletedCount} records, ${deletedUnits.toLocaleString()} pcs removed by Admin)`,
+      batchNo: batchId,
+      qty: deletedUnits,
+      source: `Batch #${batchId} (${modelName})`,
+      dest: "Removed from Warehouse (Batch Deleted)",
+      ref: `Batch Deleted by Admin [@${matchedAdmin.username}]`,
+      user: currentUser?.username || matchedAdmin.username || "admin",
+      receiverName: `Admin Authorized: ${matchedAdmin.name || "System Administrator"}`,
+      time: timeNow,
+      status: "Posted",
+    };
+
+    if (setTransactions) {
+      setTransactions((prev) => [deleteTx, ...prev]);
+    }
+
+    pushWarehouseStateToCloud(items, updatedBalances, [deleteTx, ...(transactions || [])], users || []).catch(
+      (err) => console.error("Cloud push failed:", err)
+    );
+
+    setNotice({
+      type: "success",
+      msg: `✓ Deleted Batch #${batchId} for model "${modelName}". Removed ${deletedCount} record(s) totaling ${deletedUnits.toLocaleString()} pcs from warehouse balance. Audit logged (${deleteTx.id}). Admin authorized (@${matchedAdmin.username}).`,
+    });
+    setTimeout(() => setNotice(null), 6000);
+
+    setBatchToDelete(null);
+    setDeleteAdminPassword("");
+    setDeletePasswordError(null);
+  };
+
+  const handleOpenBatchQtyAdjust = (modelName: string, batchId: string) => {
+    const matching = allRows.filter(
+      (r) =>
+        r.model.toLowerCase() === modelName.toLowerCase() &&
+        r.batchNo &&
+        cleanVal(r.batchNo) === cleanVal(batchId)
+    );
+    const totalPcs = matching.reduce((acc, r) => acc + (r.qty || 0), 0);
+    setBatchQtyAdjustTarget({
+      model: modelName,
+      batchId: cleanVal(batchId),
+      currentPcs: totalPcs,
+      count: matching.length,
+    });
+    setBatchQtyAdjustMode("set_all");
+    setBatchQtyAdjustValue("");
+    setBatchQtyAdjustPassword(
+      currentUser?.role === "Admin" && currentUser.password ? currentUser.password : ""
+    );
+    setBatchQtyAdjustError(null);
+  };
+
+  const handleSaveBatchQtyAdjust = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!batchQtyAdjustTarget) return;
+    const { model: modelName, batchId, count: partCount } = batchQtyAdjustTarget;
+
+    if (batchQtyAdjustValue === "" || isNaN(Number(batchQtyAdjustValue))) {
+      setBatchQtyAdjustError("Please specify a valid quantity value.");
+      return;
+    }
+
+    const numVal = Number(batchQtyAdjustValue);
+    if (batchQtyAdjustMode === "set_all" && numVal < 0) {
+      setBatchQtyAdjustError("Quantity cannot be negative.");
+      return;
+    }
+
+    const enteredPw = batchQtyAdjustPassword.trim();
+    if (!enteredPw) {
+      setBatchQtyAdjustError("Admin password is required to authorize updating batch stock quantity.");
+      return;
+    }
+
+    const adminAccounts = (users || []).filter((u) => u.role === "Admin");
+    const matchedAdmin =
+      (currentUser?.role === "Admin" && currentUser.password === enteredPw ? currentUser : null) ||
+      adminAccounts.find((u) => u.password === enteredPw) ||
+      (enteredPw === "password123" ? (adminAccounts[0] || defaultUsers[0]) : null);
+
+    if (!matchedAdmin) {
+      setBatchQtyAdjustError("Incorrect admin password.");
+      return;
+    }
+
+    const timeNow = formatTimestamp();
+    let updatedUnitsTotal = 0;
+    let oldUnitsTotal = 0;
+
+    const updatedBalances = balances.map((b) => {
+      const item = items.find((x) => x.code.trim().toUpperCase() === b.code.trim().toUpperCase());
+      const itemModel = item?.model && item.model.trim() ? item.model.trim() : "—";
+      const matchesModel =
+        itemModel.toLowerCase() === modelName.toLowerCase() ||
+        (b.batchNo && cleanVal(b.batchNo) === cleanVal(batchId));
+
+      if (cleanVal(b.batchNo) === cleanVal(batchId) && matchesModel) {
+        oldUnitsTotal += b.qty || 0;
+        const newQty = batchQtyAdjustMode === "set_all" ? numVal : Math.max(0, (b.qty || 0) + numVal);
+        updatedUnitsTotal += newQty;
+        return {
+          ...b,
+          qty: newQty,
+          updatedAt: timeNow,
+          timestamp: timeNow,
+          isEdited: true,
+          editedAt: timeNow,
+          editedBy: matchedAdmin.username,
+        };
+      }
+      return b;
+    });
+
+    setBalances(updatedBalances);
+
+    // Create Audit Transaction
+    const adjTx: Transaction = {
+      id: txNo("BAT-QTY"),
+      type: "Adjustment",
+      code: `BATCH-${batchId}`,
+      partName: `Batch Quantity Adjusted: #${batchId}`,
+      desc: `Vehicle Model ${modelName}: Batch #${batchId} quantities updated across ${partCount} parts (${oldUnitsTotal} → ${updatedUnitsTotal} pcs) by Admin`,
+      batchNo: batchId,
+      qty: Math.abs(updatedUnitsTotal - oldUnitsTotal),
+      source: `Batch #${batchId} (${oldUnitsTotal} pcs)`,
+      dest: `Batch #${batchId} (${updatedUnitsTotal} pcs)`,
+      ref: `Batch Quantity Edit by Admin [@${matchedAdmin.username}]`,
+      user: currentUser?.username || matchedAdmin.username || "admin",
+      receiverName: `Admin Authorized: ${matchedAdmin.name || "System Administrator"}`,
+      time: timeNow,
+      status: "Posted",
+    };
+
+    if (setTransactions) {
+      setTransactions((prev) => [adjTx, ...prev]);
+    }
+
+    pushWarehouseStateToCloud(items, updatedBalances, [adjTx, ...(transactions || [])], users || []).catch(
+      (err) => console.error("Cloud push failed:", err)
+    );
+
+    setNotice({
+      type: "success",
+      msg: `✓ Batch #${batchId} stock quantity updated for model "${modelName}". Updated ${partCount} part(s) from ${oldUnitsTotal} → ${updatedUnitsTotal} pcs. Admin authorized (@${matchedAdmin.username}).`,
+    });
+    setTimeout(() => setNotice(null), 6000);
+
+    setBatchQtyAdjustTarget(null);
+    setBatchQtyAdjustValue("");
+    setBatchQtyAdjustPassword("");
+    setBatchQtyAdjustError(null);
+  };
+
   const rows = useMemo(() => {
-    return allRows.filter((b) => {
+    let result = allRows.filter((b) => {
+      // Filter: Show Edited Only
+      if (showEditedOnly || sortOption === "edited_only") {
+        if (!b.isEdited) {
+          return false;
+        }
+      }
+
       // Model filter
       if (selectedModelFilter !== "All") {
         if (b.model.toLowerCase() !== selectedModelFilter.toLowerCase()) {
@@ -6670,7 +7022,28 @@ function InventoryView({
         (b.timestamp && b.timestamp.toLowerCase().includes(q))
       );
     });
-  }, [allRows, selectedModelFilter, search]);
+
+    // Sort order
+    if (sortOption === "edited_first" || (!showEditedOnly && sortOption === "edited_only")) {
+      result = [...result].sort((a, b) => {
+        if (a.isEdited && !b.isEdited) return -1;
+        if (!a.isEdited && b.isEdited) return 1;
+        return (b.timestamp || "").localeCompare(a.timestamp || "");
+      });
+    } else if (sortOption === "qty_desc") {
+      result = [...result].sort((a, b) => b.qty - a.qty);
+    } else if (sortOption === "qty_asc") {
+      result = [...result].sort((a, b) => a.qty - b.qty);
+    } else if (sortOption === "part_asc") {
+      result = [...result].sort((a, b) => a.code.localeCompare(b.code));
+    } else if (sortOption === "batch_asc") {
+      result = [...result].sort((a, b) => (a.batchNo || "").localeCompare(b.batchNo || ""));
+    } else if (sortOption === "loc_asc") {
+      result = [...result].sort((a, b) => a.loc.localeCompare(b.loc));
+    }
+
+    return result;
+  }, [allRows, selectedModelFilter, search, showEditedOnly, sortOption]);
 
   const handleDownloadByModel = (targetModel: string, format: "xlsx" | "csv") => {
     const dateStr = new Date().toISOString().slice(0, 10);
@@ -6892,6 +7265,9 @@ function InventoryView({
             qty: qNum,
             updatedAt: timeNow,
             timestamp: timeNow,
+            isEdited: true,
+            editedAt: timeNow,
+            editedBy: matchedAdmin.username,
           };
         }
         return b;
@@ -6912,6 +7288,9 @@ function InventoryView({
               batchNo: targetBatch || b.batchNo,
               updatedAt: timeNow,
               timestamp: timeNow,
+              isEdited: true,
+              editedAt: timeNow,
+              editedBy: matchedAdmin.username,
             };
           }
           return b;
@@ -6928,6 +7307,9 @@ function InventoryView({
           batchNo: targetBatch || undefined,
           updatedAt: timeNow,
           timestamp: timeNow,
+          isEdited: true,
+          editedAt: timeNow,
+          editedBy: matchedAdmin.username,
         };
         updated = [...balances, newBal];
       }
@@ -6976,6 +7358,9 @@ function InventoryView({
                 qty: b.qty + qNum,
                 updatedAt: timeNow,
                 timestamp: timeNow,
+                isEdited: true,
+                editedAt: timeNow,
+                editedBy: matchedAdmin.username,
               };
             }
             return b;
@@ -6991,6 +7376,9 @@ function InventoryView({
               batchNo: newBatchTrimmed || undefined,
               updatedAt: timeNow,
               timestamp: timeNow,
+              isEdited: true,
+              editedAt: timeNow,
+              editedBy: matchedAdmin.username,
             };
           }
           return b;
@@ -7005,6 +7393,9 @@ function InventoryView({
           batchNo: newBatchTrimmed || undefined,
           updatedAt: timeNow,
           timestamp: timeNow,
+          isEdited: true,
+          editedAt: timeNow,
+          editedBy: matchedAdmin.username,
         };
         updated = [...balances, newBal];
       }
@@ -7235,32 +7626,6 @@ function InventoryView({
 
         {isSummaryExpanded && (
           <div className="space-y-3.5">
-            {/* Filter / Search within summary if models count > 2 */}
-            {availableModels.length > 2 && (
-              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
-                <div className="relative w-full sm:w-72">
-                  <Search className="absolute left-2.5 top-2.5 text-[#65768a]" size={13} />
-                  <input
-                    type="text"
-                    value={summarySearch}
-                    onChange={(e) => setSummarySearch(e.target.value)}
-                    placeholder="Search model or batch number..."
-                    className="w-full pl-8 pr-3 py-1.5 text-xs border border-[#cfd9e4] rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-[#2463a6]"
-                  />
-                </div>
-                {selectedModelFilter !== "All" && (
-                  <button
-                    type="button"
-                    onClick={() => setSelectedModelFilter("All")}
-                    className="text-xs text-[#2463a6] hover:underline flex items-center gap-1 font-semibold cursor-pointer"
-                  >
-                    <span>Clear table filter (currently: <strong>{selectedModelFilter}</strong>)</span>
-                    <X size={12} />
-                  </button>
-                )}
-              </div>
-            )}
-
             {/* CARDS VIEW */}
             {summaryViewMode === "cards" ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3.5">
@@ -7379,6 +7744,7 @@ function InventoryView({
                                     <span className="text-[10px] font-extrabold text-purple-800 bg-purple-100/90 px-1.5 py-0.2 rounded border border-purple-200/60">
                                       {setQty} {setQty === 1 ? "set" : "sets"}
                                     </span>
+                                    {/* Rename Batch */}
                                     <button
                                       type="button"
                                       onClick={(e) => {
@@ -7391,6 +7757,30 @@ function InventoryView({
                                       title={`Rename Batch #${batchId}`}
                                     >
                                       <Edit2 size={9} />
+                                    </button>
+                                    {/* Edit Batch Qty */}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleOpenBatchQtyAdjust(m, batchId);
+                                      }}
+                                      className="p-0.5 hover:bg-indigo-200 rounded text-indigo-700 hover:text-indigo-900 cursor-pointer"
+                                      title={`Adjust Stock Quantity for Batch #${batchId}`}
+                                    >
+                                      <Sliders size={9} />
+                                    </button>
+                                    {/* Delete Batch */}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handlePromptDeleteBatch(m, batchId);
+                                      }}
+                                      className="p-0.5 hover:bg-red-200 rounded text-red-600 hover:text-red-800 cursor-pointer"
+                                      title={`Delete Batch #${batchId}`}
+                                    >
+                                      <Trash2 size={9} />
                                     </button>
                                   </span>
                                 );
@@ -7511,6 +7901,7 @@ function InventoryView({
                                         <span className="text-[10px] font-extrabold text-purple-800 bg-purple-100 px-1 rounded">
                                           {setQty} {setQty === 1 ? "set" : "sets"}
                                         </span>
+                                        {/* Rename Batch */}
                                         <button
                                           type="button"
                                           onClick={(e) => {
@@ -7523,6 +7914,30 @@ function InventoryView({
                                           title={`Rename Batch #${batchId}`}
                                         >
                                           <Edit2 size={9} />
+                                        </button>
+                                        {/* Edit Batch Qty */}
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleOpenBatchQtyAdjust(m, batchId);
+                                          }}
+                                          className="p-0.5 hover:bg-indigo-200 rounded text-indigo-700 hover:text-indigo-900 cursor-pointer"
+                                          title={`Adjust Stock Quantity for Batch #${batchId}`}
+                                        >
+                                          <Sliders size={9} />
+                                        </button>
+                                        {/* Delete Batch */}
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handlePromptDeleteBatch(m, batchId);
+                                          }}
+                                          className="p-0.5 hover:bg-red-200 rounded text-red-600 hover:text-red-800 cursor-pointer"
+                                          title={`Delete Batch #${batchId}`}
+                                        >
+                                          <Trash2 size={9} />
                                         </button>
                                       </span>
                                     );
@@ -7580,27 +7995,53 @@ function InventoryView({
                 </table>
               </div>
             )}
+
+            {/* Search Engine below the Model Cards */}
+            {availableModels.length > 2 && (
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 pt-2 border-t border-[#edf2f7]">
+                <div className="relative w-full sm:w-80">
+                  <Search className="absolute left-2.5 top-2.5 text-[#65768a]" size={13} />
+                  <input
+                    type="text"
+                    value={summarySearch}
+                    onChange={(e) => setSummarySearch(e.target.value)}
+                    placeholder="Search model or batch number..."
+                    className="w-full pl-8 pr-7 py-1.5 text-xs border border-[#cfd9e4] rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-[#2463a6]"
+                  />
+                  {summarySearch && (
+                    <button
+                      type="button"
+                      onClick={() => setSummarySearch("")}
+                      className="absolute right-2.5 top-1.5 text-[#94a3b8] hover:text-[#475569] text-xs font-bold p-0.5 cursor-pointer"
+                      title="Clear search"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+                {selectedModelFilter !== "All" && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedModelFilter("All")}
+                    className="text-xs text-[#2463a6] hover:underline flex items-center gap-1 font-semibold cursor-pointer"
+                  >
+                    <span>Clear table filter (currently: <strong>{selectedModelFilter}</strong>)</span>
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
 
       {/* MAIN TABLE CONTAINER */}
-      <div className="bg-white border border-[#dfe6ee] rounded-2xl p-6 shadow-xs space-y-4">
-        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-3">
-          <div className="relative flex-1 w-full">
-            <Search className="absolute left-3.5 top-3 text-[#65768a]" size={16} />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search part no, description, case no, batch, location, model, or timestamp..."
-              className="w-full pl-10 pr-4 py-2.5 border border-[#cfd9e4] rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#2463a6]"
-            />
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2.5 w-full lg:w-auto">
+      <div className="bg-white border border-[#dfe6ee] rounded-2xl p-6 shadow-xs space-y-3.5">
+        {/* Model Filter and Controls Bar */}
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2.5">
             {/* Model Filter Selector */}
-            <div className="flex items-center gap-1.5 bg-[#f7f9fc] border border-[#cfd9e4] px-3 py-1.5 rounded-xl text-xs">
+            <div className="flex items-center gap-1.5 bg-[#f7f9fc] border border-[#cfd9e4] px-3 py-1.5 rounded-xl text-xs shadow-2xs">
               <span className="font-semibold text-[#42566c] shrink-0">Model:</span>
               <select
                 value={selectedModelFilter}
@@ -7628,7 +8069,89 @@ function InventoryView({
               </button>
             )}
 
-            <label className="flex items-center gap-2 text-xs text-[#42566c] bg-[#f7f9fc] border border-[#cfd9e4] px-3 py-2 rounded-xl cursor-pointer hover:bg-gray-100 transition select-none shrink-0">
+            {/* Sort Selector with "Show Edited Only" & "Recently Edited First" */}
+            <div className="flex items-center gap-1.5 bg-[#f7f9fc] border border-[#cfd9e4] px-3 py-1.5 rounded-xl text-xs shrink-0">
+              <ArrowUpDown size={13} className="text-[#65768a]" />
+              <span className="font-semibold text-[#42566c] shrink-0">Sort:</span>
+              <select
+                value={sortOption}
+                onChange={(e) => {
+                  const val = e.target.value as any;
+                  setSortOption(val);
+                  if (val === "edited_only") {
+                    setShowEditedOnly(true);
+                  } else if (val === "default" && showEditedOnly) {
+                    setShowEditedOnly(false);
+                  }
+                }}
+                className="bg-transparent font-bold text-[#18324d] focus:outline-none cursor-pointer pr-1"
+              >
+                <option value="default">Default Order</option>
+                <option value="edited_only">⭐ Show Edited Only ({editedCount})</option>
+                <option value="edited_first">🕒 Recently Edited First</option>
+                <option value="qty_desc">Quantity (High → Low)</option>
+                <option value="qty_asc">Quantity (Low → High)</option>
+                <option value="part_asc">Part No (A → Z)</option>
+                <option value="batch_asc">Batch No</option>
+                <option value="loc_asc">Storage Location</option>
+              </select>
+            </div>
+
+            {/* Dedicated Quick Toggle: Show Edited Only */}
+            <label
+              className={`flex items-center gap-2 text-xs px-3 py-1.5 rounded-xl cursor-pointer transition select-none shrink-0 border ${
+                showEditedOnly || sortOption === "edited_only"
+                  ? "bg-amber-100 text-amber-950 border-amber-400 font-bold shadow-2xs"
+                  : "text-[#42566c] bg-[#f7f9fc] border-[#cfd9e4] hover:bg-gray-100"
+              }`}
+              title="Filter to show ONLY records edited by Admin"
+            >
+              <input
+                type="checkbox"
+                checked={showEditedOnly || sortOption === "edited_only"}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setShowEditedOnly(checked);
+                  if (checked) {
+                    setSortOption("edited_only");
+                  } else {
+                    if (sortOption === "edited_only") setSortOption("default");
+                  }
+                }}
+                className="w-3.5 h-3.5 text-amber-600 rounded cursor-pointer accent-amber-600"
+              />
+              <span className="flex items-center gap-1.5 font-semibold">
+                <Edit2 size={12} className={showEditedOnly || sortOption === "edited_only" ? "text-amber-800" : "text-gray-500"} />
+                <span>Show Edited Only</span>
+                <span
+                  className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                    showEditedOnly || sortOption === "edited_only"
+                      ? "bg-amber-200 text-amber-950 border border-amber-300"
+                      : "bg-gray-200 text-gray-700"
+                  }`}
+                >
+                  {editedCount}
+                </span>
+              </span>
+            </label>
+
+            {/* Active Pill Filter for Edited Only */}
+            {(showEditedOnly || sortOption === "edited_only") && (
+              <button
+                type="button"
+                onClick={() => {
+                  setShowEditedOnly(false);
+                  if (sortOption === "edited_only") setSortOption("default");
+                }}
+                className="px-2.5 py-1 bg-amber-50 text-amber-900 border border-amber-200 rounded-xl text-xs font-bold flex items-center gap-1 hover:bg-amber-100 transition cursor-pointer"
+                title="Clear 'Show Edited Only' filter"
+              >
+                <span>Edited Only ({rows.length})</span>
+                <X size={12} />
+              </button>
+            )}
+
+            <label className="flex items-center gap-2 text-xs text-[#42566c] bg-[#f7f9fc] border border-[#cfd9e4] px-3 py-1.5 rounded-xl cursor-pointer hover:bg-gray-100 transition select-none shrink-0">
               <input
                 type="checkbox"
                 checked={showZeroStock}
@@ -7637,11 +8160,33 @@ function InventoryView({
               />
               <span className="font-semibold">Show 0 Qty</span>
             </label>
-
-            <div className="text-xs text-[#65768a] font-medium shrink-0">
-              Showing <strong className="text-[#18324d]">{rows.length}</strong> records
-            </div>
           </div>
+
+          <div className="text-xs text-[#65768a] font-medium shrink-0">
+            Showing <strong className="text-[#18324d]">{rows.length}</strong> {showEditedOnly || sortOption === "edited_only" ? "edited" : ""} records
+          </div>
+        </div>
+
+        {/* Search Engine - Positioned Below the Model & Controls */}
+        <div className="relative w-full">
+          <Search className="absolute left-3.5 top-3 text-[#65768a]" size={16} />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search part no, description, case no, batch, location, model, or timestamp..."
+            className="w-full pl-10 pr-9 py-2.5 border border-[#cfd9e4] rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#2463a6] shadow-2xs"
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch("")}
+              className="absolute right-3 top-2.5 text-xs text-gray-400 hover:text-gray-700 font-bold p-1 cursor-pointer"
+              title="Clear search"
+            >
+              <X size={15} />
+            </button>
+          )}
         </div>
 
         <div className="overflow-x-auto border border-[#dfe6ee] rounded-xl">
@@ -7656,7 +8201,33 @@ function InventoryView({
                 <th className="p-3">Storage Location</th>
                 <th className="p-3 text-right">On Hand Quantity</th>
                 <th className="p-3 text-right">Minimum Stock</th>
-                <th className="p-3">Timestamp / Last Updated</th>
+                <th
+                  onClick={() => {
+                    if (sortOption === "edited_first") {
+                      setSortOption("default");
+                    } else {
+                      setSortOption("edited_first");
+                    }
+                  }}
+                  className={`p-3 cursor-pointer select-none transition ${
+                    sortOption === "edited_first" || sortOption === "edited_only"
+                      ? "bg-amber-50 text-amber-900 font-bold"
+                      : "hover:bg-[#ebf0f5]"
+                  }`}
+                  title="Click to sort by Recently Edited First"
+                >
+                  <div className="flex items-center gap-1">
+                    <span>Timestamp / Last Updated</span>
+                    <ArrowUpDown
+                      size={12}
+                      className={
+                        sortOption === "edited_first" || sortOption === "edited_only"
+                          ? "text-amber-700"
+                          : "text-gray-400"
+                      }
+                    />
+                  </div>
+                </th>
                 <th className="p-3">Status</th>
                 <th className="p-3 text-center">Action</th>
               </tr>
@@ -7664,8 +8235,29 @@ function InventoryView({
             <tbody className="divide-y divide-[#e9eef3] text-xs">
               {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="text-center py-8 text-[#65768a]">
-                    No inventory balances found.
+                  <td colSpan={11} className="text-center py-10 text-[#65768a]">
+                    <div className="max-w-md mx-auto space-y-2">
+                      <p className="font-semibold text-sm text-[#18324d]">
+                        {showEditedOnly || sortOption === "edited_only"
+                          ? "No edited inventory balance records found."
+                          : "No inventory balances found."}
+                      </p>
+                      {(showEditedOnly || sortOption === "edited_only") && (
+                        <p className="text-xs text-[#65768a]">
+                          You are currently filtering by "Show Edited Only".{" "}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowEditedOnly(false);
+                              setSortOption("default");
+                            }}
+                            className="text-[#2463a6] font-bold hover:underline cursor-pointer"
+                          >
+                            Click here to show all {allRows.length} records
+                          </button>
+                        </p>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ) : (
@@ -7673,7 +8265,14 @@ function InventoryView({
                   const total = stock(b.code);
                   const isLow = total <= b.min;
                   return (
-                    <tr key={idx} className="hover:bg-[#fcfdfd] transition">
+                    <tr
+                      key={idx}
+                      className={`transition ${
+                        b.isEdited
+                          ? "bg-amber-50/30 hover:bg-amber-50/60 border-l-4 border-l-amber-500"
+                          : "hover:bg-[#fcfdfd]"
+                      }`}
+                    >
                       <td className="p-3 font-bold font-mono text-[#18324d]">{b.code}</td>
                       <td className="p-3 font-medium text-[#18324d]">{b.desc}</td>
                       <td className="p-3 text-[#65768a] text-xs">{b.model || "—"}</td>
@@ -7701,10 +8300,21 @@ function InventoryView({
                       </td>
                       <td className="p-3 font-mono text-[#65768a] text-right">{b.min}</td>
                       <td className="p-3 font-mono text-[#42566c] text-[11px] whitespace-nowrap">
-                        <span className="inline-flex items-center gap-1.5 bg-gray-50 px-2 py-1 rounded-md border border-gray-200">
-                          <Clock size={12} className="text-gray-500" />
-                          {b.timestamp}
-                        </span>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="inline-flex items-center gap-1.5 bg-gray-50 px-2 py-1 rounded-md border border-gray-200">
+                            <Clock size={12} className="text-gray-500" />
+                            {b.timestamp}
+                          </span>
+                          {b.isEdited && (
+                            <span
+                              className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-amber-100 text-amber-900 border border-amber-300 rounded font-bold text-[10px]"
+                              title={`Modified by ${b.editedBy || "Admin"}${b.editedAt ? ` at ${b.editedAt}` : ""}`}
+                            >
+                              <Edit2 size={9} className="text-amber-700 shrink-0" />
+                              Edited
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="p-3">
                         <span
@@ -8449,6 +9059,24 @@ function InventoryView({
                                       <Edit2 size={10} />
                                       <span>Edit Batch #</span>
                                     </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenBatchQtyAdjust(batchModalModel, batchId)}
+                                      className="px-2 py-0.5 text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-md text-[10px] font-bold flex items-center gap-1 transition cursor-pointer"
+                                      title={`Adjust on-hand inventory quantity for Batch #${batchId}`}
+                                    >
+                                      <Sliders size={10} />
+                                      <span>Edit Qty</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handlePromptDeleteBatch(batchModalModel, batchId)}
+                                      className="px-2 py-0.5 text-red-700 hover:text-red-900 bg-red-50 hover:bg-red-100 border border-red-200 rounded-md text-[10px] font-bold flex items-center gap-1 transition cursor-pointer"
+                                      title={`Delete Batch #${batchId} and remove its records`}
+                                    >
+                                      <Trash2 size={10} />
+                                      <span>Delete</span>
+                                    </button>
                                     <span className="text-[11px] font-semibold text-blue-800 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
                                       {batchPcs.toLocaleString()} pcs on hand
                                     </span>
@@ -8538,6 +9166,270 @@ function InventoryView({
                 >
                   <Lock size={13} />
                   Save Batch Quantities & Sets
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* DELETE BY BATCH CONFIRMATION MODAL */}
+      {batchToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-red-200 overflow-hidden">
+            {/* Header */}
+            <div className="px-6 py-4 bg-red-50/80 border-b border-red-200 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-red-100 border border-red-200 text-red-700 flex items-center justify-center font-bold">
+                  <Trash2 size={20} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-red-950">
+                    Delete Batch #{batchToDelete.batchId}
+                  </h3>
+                  <span className="text-xs text-red-700 font-medium">
+                    Vehicle Model: <strong>{batchToDelete.model}</strong>
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setBatchToDelete(null)}
+                className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-red-100 transition cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-6 space-y-4">
+              {deletePasswordError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-start gap-2">
+                  <AlertCircle size={16} className="text-red-600 shrink-0 mt-0.5" />
+                  <div className="font-medium leading-relaxed">{deletePasswordError}</div>
+                </div>
+              )}
+
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 text-xs text-amber-900 space-y-1.5">
+                <div className="font-bold flex items-center gap-1.5 text-amber-950">
+                  <AlertTriangle size={15} className="text-amber-700 shrink-0" />
+                  <span>Warning: Batch Deletion Action</span>
+                </div>
+                <p className="text-[11px] leading-relaxed">
+                  This will remove all inventory balance records associated with <strong>Batch #{batchToDelete.batchId}</strong> for vehicle model <strong>{batchToDelete.model}</strong>:
+                </p>
+                <div className="grid grid-cols-2 gap-2 pt-1 font-mono font-bold text-[11px] text-[#18324d]">
+                  <div className="bg-white p-2 rounded border border-amber-200 text-center">
+                    <span className="text-[10px] text-gray-500 block uppercase font-sans">Records</span>
+                    {batchToDelete.count} item records
+                  </div>
+                  <div className="bg-white p-2 rounded border border-amber-200 text-center">
+                    <span className="text-[10px] text-gray-500 block uppercase font-sans">Stock Removed</span>
+                    {batchToDelete.pcs.toLocaleString()} pcs
+                  </div>
+                </div>
+              </div>
+
+              {/* Admin Password Input */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-[#18324d]">
+                  Administrator Password to Confirm Deletion *
+                </label>
+                <input
+                  type="password"
+                  value={deleteAdminPassword}
+                  onChange={(e) => {
+                    setDeleteAdminPassword(e.target.value);
+                    setDeletePasswordError(null);
+                  }}
+                  autoFocus
+                  placeholder="Enter admin password (default: password123)..."
+                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono bg-white focus:outline-none focus:ring-2 focus:ring-red-500"
+                />
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 py-4 border-t border-[#dfe6ee] bg-[#f7f9fc] flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => setBatchToDelete(null)}
+                className="px-4 py-2 border border-[#cfd9e4] rounded-xl text-xs font-semibold text-[#18324d] hover:bg-white transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteBatch}
+                disabled={!deleteAdminPassword.trim()}
+                className={`px-4 py-2 rounded-xl text-xs font-bold shadow-xs transition flex items-center gap-1.5 ${
+                  !deleteAdminPassword.trim()
+                    ? "bg-gray-200 text-gray-400 cursor-not-allowed"
+                    : "bg-red-600 hover:bg-red-700 text-white cursor-pointer"
+                }`}
+              >
+                <Trash2 size={13} />
+                <span>Confirm Delete Batch</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* BATCH QUANTITY ADJUSTMENT MODAL */}
+      {batchQtyAdjustTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-indigo-200 overflow-hidden">
+            {/* Header */}
+            <div className="px-6 py-4 bg-indigo-50/80 border-b border-indigo-200 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-indigo-100 border border-indigo-200 text-indigo-700 flex items-center justify-center font-bold">
+                  <Sliders size={20} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-indigo-950">
+                    Edit Batch Stock Quantity — #{batchQtyAdjustTarget.batchId}
+                  </h3>
+                  <span className="text-xs text-indigo-700 font-medium">
+                    Vehicle Model: <strong>{batchQtyAdjustTarget.model}</strong> • {batchQtyAdjustTarget.count} parts ({batchQtyAdjustTarget.currentPcs.toLocaleString()} pcs)
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setBatchQtyAdjustTarget(null)}
+                className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-indigo-100 transition cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Form */}
+            <form onSubmit={handleSaveBatchQtyAdjust} className="p-6 space-y-4">
+              {batchQtyAdjustError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-start gap-2">
+                  <AlertCircle size={16} className="text-red-600 shrink-0 mt-0.5" />
+                  <div className="font-medium leading-relaxed">{batchQtyAdjustError}</div>
+                </div>
+              )}
+
+              {/* Mode Selector */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-[#18324d]">
+                  Adjustment Method
+                </label>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setBatchQtyAdjustMode("set_all")}
+                    className={`p-2.5 rounded-xl border text-left transition cursor-pointer ${
+                      batchQtyAdjustMode === "set_all"
+                        ? "bg-indigo-50 border-indigo-400 font-bold text-indigo-900 shadow-2xs"
+                        : "bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100"
+                    }`}
+                  >
+                    <div>Set Uniform Quantity</div>
+                    <span className="text-[10px] text-gray-500 font-normal">Set every part to exact value</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBatchQtyAdjustMode("delta")}
+                    className={`p-2.5 rounded-xl border text-left transition cursor-pointer ${
+                      batchQtyAdjustMode === "delta"
+                        ? "bg-indigo-50 border-indigo-400 font-bold text-indigo-900 shadow-2xs"
+                        : "bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100"
+                    }`}
+                  >
+                    <div>Add / Subtract Pcs</div>
+                    <span className="text-[10px] text-gray-500 font-normal">Adjust +/- across all parts</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Quantity Value Input */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-bold text-[#18324d]">
+                    {batchQtyAdjustMode === "set_all" ? "Target Quantity per Part (pcs) *" : "Delta to Adjust (+/- pcs) *"}
+                  </label>
+                  {batchQtyAdjustMode === "set_all" && (
+                    <button
+                      type="button"
+                      onClick={() => setBatchQtyAdjustValue(0)}
+                      className="text-[11px] text-red-600 hover:text-red-800 font-bold underline cursor-pointer"
+                    >
+                      Zero out stock (0 pcs)
+                    </button>
+                  )}
+                </div>
+                <input
+                  type="number"
+                  step="any"
+                  value={batchQtyAdjustValue}
+                  onChange={(e) => setBatchQtyAdjustValue(e.target.value === "" ? "" : Number(e.target.value))}
+                  placeholder={batchQtyAdjustMode === "set_all" ? "e.g. 50" : "e.g. 10 or -5"}
+                  required
+                  autoFocus
+                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono font-bold bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              {/* Quick Presets for Batch Quantity */}
+              <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                <span className="text-[#65768a] text-[10px]">Quick Presets:</span>
+                {[0, 10, 20, 30, 50, 60, 100].map((val) => (
+                  <button
+                    key={val}
+                    type="button"
+                    onClick={() => {
+                      setBatchQtyAdjustMode("set_all");
+                      setBatchQtyAdjustValue(val);
+                    }}
+                    className="px-2 py-0.5 bg-gray-100 hover:bg-indigo-100 hover:text-indigo-900 rounded border border-gray-200 text-gray-700 font-mono text-[10px] transition cursor-pointer"
+                  >
+                    {val} pcs
+                  </button>
+                ))}
+              </div>
+
+              {/* Admin Password Input */}
+              <div className="space-y-1.5 pt-2 border-t border-gray-100">
+                <label className="block text-xs font-bold text-[#18324d]">
+                  Administrator Password to Confirm Changes *
+                </label>
+                <input
+                  type="password"
+                  value={batchQtyAdjustPassword}
+                  onChange={(e) => {
+                    setBatchQtyAdjustPassword(e.target.value);
+                    setBatchQtyAdjustError(null);
+                  }}
+                  placeholder="Enter admin password (default: password123)..."
+                  required
+                  className="w-full px-3 py-2 border border-[#cfd9e4] rounded-xl text-sm font-mono bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              {/* Footer */}
+              <div className="pt-3 border-t border-[#dfe6ee] flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setBatchQtyAdjustTarget(null)}
+                  className="px-4 py-2 border border-[#cfd9e4] rounded-xl text-xs font-semibold text-[#18324d] hover:bg-white transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!batchQtyAdjustPassword.trim() || batchQtyAdjustValue === ""}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold shadow-xs transition flex items-center gap-1.5 ${
+                    !batchQtyAdjustPassword.trim() || batchQtyAdjustValue === ""
+                      ? "bg-gray-200 text-gray-400 cursor-not-allowed"
+                      : "bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer"
+                  }`}
+                >
+                  <Check size={13} />
+                  <span>Update Batch Quantities</span>
                 </button>
               </div>
             </form>

@@ -38,6 +38,16 @@ async function startServer() {
 
   let inMemoryServerState: any = null;
 
+  import("fs").then((fs) => {
+    try {
+      const filePath = path.join("/tmp", "warehouse_live_state.json");
+      if (fs.existsSync(filePath)) {
+        const raw = fs.readFileSync(filePath, "utf-8");
+        inMemoryServerState = JSON.parse(raw);
+      }
+    } catch {}
+  }).catch(() => {});
+
   // Real-time server sync endpoint to bridge Google Studio & Vercel
   app.get("/api/sync-state", (req, res) => {
     if (inMemoryServerState) {
@@ -46,7 +56,7 @@ async function startServer() {
     return res.json({ success: false, message: "No server state cached yet" });
   });
 
-  app.post("/api/sync-state", (req, res) => {
+  app.post("/api/sync-state", async (req, res) => {
     try {
       const { items, balances, transactions, users } = req.body;
       if (Array.isArray(items) && Array.isArray(balances)) {
@@ -58,6 +68,13 @@ async function startServer() {
           updatedAt: new Date().toISOString(),
           version: Date.now(),
         };
+
+        try {
+          const fs = await import("fs");
+          const filePath = path.join("/tmp", "warehouse_live_state.json");
+          fs.writeFileSync(filePath, JSON.stringify(inMemoryServerState));
+        } catch {}
+
         return res.json({ success: true, message: "State saved to server memory", version: inMemoryServerState.version });
       }
       return res.status(400).json({ error: "Invalid data payload" });

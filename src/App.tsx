@@ -284,6 +284,7 @@ export default function App() {
   const isRemoteUpdate = useRef(false);
   const isInitialCloudSyncDone = useRef(false);
   const lastSyncedJson = useRef("");
+  const lastServerVersion = useRef(0);
   const [isQuotaExceededWarning, setIsQuotaExceededWarning] = useState(() => isFirestoreQuotaExceeded());
   const [syncStatusToast, setSyncStatusToast] = useState<{ text: string; isError?: boolean } | null>(null);
   const [isRetryingSync, setIsRetryingSync] = useState(false);
@@ -392,14 +393,38 @@ export default function App() {
       }
     };
 
-    window.addEventListener("focus", handleFocusOrOnline);
-    window.addEventListener("online", handleFocusOrOnline);
-
     return () => {
       clearInterval(autoSyncInterval);
       window.removeEventListener("focus", handleFocusOrOnline);
       window.removeEventListener("online", handleFocusOrOnline);
     };
+  }, []);
+
+  // Real-Time Server Bridge Polling Loop (Syncs Handphones, Laptops, Vercel & Studio 24/7)
+  useEffect(() => {
+    const bridgePollInterval = setInterval(async () => {
+      try {
+        const res = await fetch("/api/sync-state");
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && json.data && json.data.version) {
+            const serverVersion = json.data.version;
+            if (serverVersion > lastServerVersion.current) {
+              lastServerVersion.current = serverVersion;
+              isRemoteUpdate.current = true;
+              setItems(json.data.items || []);
+              setBalances(json.data.balances || []);
+              setTransactions(json.data.transactions || []);
+              if (json.data.users && json.data.users.length) {
+                setUsers(json.data.users);
+              }
+            }
+          }
+        }
+      } catch {}
+    }, 5000);
+
+    return () => clearInterval(bridgePollInterval);
   }, []);
 
   // Helper functions

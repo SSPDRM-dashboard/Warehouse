@@ -332,39 +332,6 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
-    // CRITICAL: Do NOT push to cloud until the initial cloud sync has been completed.
-    // This prevents resetting or overwriting inventory that was already keyed in on mobile or other devices.
-    if (!isInitialCloudSyncDone.current) {
-      return;
-    }
-    if (isRemoteUpdate.current) {
-      isRemoteUpdate.current = false;
-      return;
-    }
-
-    const currentJson = JSON.stringify({ items, balances, transactions, users });
-    if (currentJson === lastSyncedJson.current) {
-      return;
-    }
-
-    lastSyncedJson.current = currentJson;
-    pushWarehouseStateToCloud(items, balances, transactions, users)
-      .then((res) => {
-        if (res && res.isQuota) {
-          setIsQuotaExceededWarning(true);
-          setSyncStatusToast({
-            text: "⚠️ Local change saved in browser storage, but Google Cloud Firestore daily write quota (20,000 writes/day) is reached. Auto-sync is active and will push to cloud automatically once quota resets or Blaze is enabled.",
-            isError: true,
-          });
-          setTimeout(() => setSyncStatusToast(null), 8000);
-        }
-      })
-      .catch((err) => {
-        console.error("Failed to push state to cloud:", err);
-      });
-  }, [items, balances, transactions, users]);
-
   // Automated Background Auto-Sync Engine
   useEffect(() => {
     const autoSyncInterval = setInterval(async () => {
@@ -400,9 +367,9 @@ export default function App() {
     };
   }, []);
 
-  // Real-Time Server Bridge Polling Loop (Syncs Handphones, Laptops, Vercel & Studio 24/7)
+  // Real-Time Server Bridge Event-Driven Sync (Syncs Handphones, Laptops, Vercel & Studio 24/7)
   useEffect(() => {
-    const bridgePollInterval = setInterval(async () => {
+    const checkState = async () => {
       try {
         const res = await fetch("/api/sync-state");
         if (res.ok) {
@@ -422,9 +389,19 @@ export default function App() {
           }
         }
       } catch {}
-    }, 5000);
+    };
 
-    return () => clearInterval(bridgePollInterval);
+    window.addEventListener("focus", checkState);
+    window.addEventListener("online", checkState);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") checkState();
+    });
+
+    return () => {
+      window.removeEventListener("focus", checkState);
+      window.removeEventListener("online", checkState);
+      document.removeEventListener("visibilitychange", checkState);
+    };
   }, []);
 
   // Helper functions

@@ -480,22 +480,7 @@ export default function App() {
               label="Overview"
             />
           )}
-          {isPanelAllowed("items") && canManage && (
-            <SidebarButton
-              active={page === "items"}
-              onClick={() => setPage("items")}
-              icon={<Boxes size={18} />}
-              label="Item Master"
-            />
-          )}
-          {isPanelAllowed("items") && !canManage && (
-            <SidebarButton
-              active={page === "items"}
-              onClick={() => setPage("items")}
-              icon={<Boxes size={18} />}
-              label="Item Lookup"
-            />
-          )}
+          {/* Moved below Inventory Balance */}
           {isPanelAllowed("receiving") && (
             <SidebarButton
               active={page === "receiving"}
@@ -550,6 +535,22 @@ export default function App() {
               onClick={() => setPage("inventory")}
               icon={<Database size={18} />}
               label="Inventory Balance"
+            />
+          )}
+          {isPanelAllowed("items") && canManage && (
+            <SidebarButton
+              active={page === "items"}
+              onClick={() => setPage("items")}
+              icon={<Boxes size={18} />}
+              label="Item Master"
+            />
+          )}
+          {isPanelAllowed("items") && !canManage && (
+            <SidebarButton
+              active={page === "items"}
+              onClick={() => setPage("items")}
+              icon={<Boxes size={18} />}
+              label="Item Master"
             />
           )}
           {isPanelAllowed("history") && (

@@ -31,7 +31,6 @@ export interface PanelConfig {
 
 export const AVAILABLE_PANELS: PanelConfig[] = [
   { id: "dashboard", label: "Overview & Dashboard", description: "Warehouse KPIs, activity feed and overview metrics", category: "Operations" },
-  { id: "items", label: "Item Master / Catalog", description: "Part numbers, descriptions, models and minimum thresholds", category: "Inventory" },
   { id: "receiving", label: "Stock Receiving", description: "New container intake, temporary staged receiving, batch & lot assignment", category: "Operations" },
   { id: "kitting_case", label: "Kitting Case", description: "Forklift batch transfer out from storage to Kitting place with case tracking", category: "Operations" },
   { id: "unpack", label: "Kitting-Unpack", description: "In-transit forklift tracking, kitting batch staging and inspection", category: "Operations" },
@@ -39,6 +38,7 @@ export const AVAILABLE_PANELS: PanelConfig[] = [
   { id: "return", label: "Return from Production", description: "Returning excess or rejected materials back into inventory", category: "Operations" },
   { id: "send_to_va", label: "Send to VA", description: "Dispatch Finished Goods (IP, Center Console, Door Trim, Cooling Module) to Vehicle Assembly line", category: "Operations" },
   { id: "inventory", label: "Inventory Balance", description: "Stock on hand by part no, location, container and lot timestamp", category: "Inventory" },
+  { id: "items", label: "Item Master / Catalog", description: "Part numbers, descriptions, models and minimum thresholds", category: "Inventory" },
   { id: "history", label: "Transaction History", description: "Comprehensive audit trail and material movement logs", category: "Inventory" },
   { id: "reports", label: "Daily Warehouse Reports", description: "Daily incoming container reports, unpack logs and production 1 sheet", category: "Reports & System" },
   { id: "ai_forecast", label: "AI Stock Intelligence", description: "Predictive reorder recommendations and stockout prevention", category: "Reports & System" },

@@ -9,13 +9,32 @@ try {
 } catch {}
 
 if (typeof window !== "undefined") {
+  const originalConsoleError = console.error;
+  console.error = function (...args: any[]) {
+    const msg = args
+      .map((a) => (typeof a === "object" && a !== null ? JSON.stringify(a) : String(a || "")))
+      .join(" ");
+    if (
+      msg.includes("RESOURCE_EXHAUSTED") ||
+      msg.includes("Quota limit exceeded") ||
+      msg.includes("Using maximum backoff delay") ||
+      msg.includes("Free daily write units")
+    ) {
+      console.warn("Firestore write quota reached. Operating seamlessly in Local Storage mode.");
+      return;
+    }
+    originalConsoleError.apply(console, args);
+  };
+
   window.addEventListener("error", (event) => {
     const msg = String(event.message || event.error || "");
     if (
       msg.includes("FIRESTORE") ||
       msg.includes("INTERNAL ASSERTION FAILED") ||
       msg.includes("missing stream token") ||
-      msg.includes("Unexpected state")
+      msg.includes("Unexpected state") ||
+      msg.includes("RESOURCE_EXHAUSTED") ||
+      msg.includes("Quota limit exceeded")
     ) {
       event.preventDefault();
       event.stopPropagation();
@@ -28,7 +47,9 @@ if (typeof window !== "undefined") {
       msg.includes("FIRESTORE") ||
       msg.includes("INTERNAL ASSERTION FAILED") ||
       msg.includes("missing stream token") ||
-      msg.includes("Unexpected state")
+      msg.includes("Unexpected state") ||
+      msg.includes("RESOURCE_EXHAUSTED") ||
+      msg.includes("Quota limit exceeded")
     ) {
       event.preventDefault();
       event.stopPropagation();

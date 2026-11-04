@@ -348,9 +348,20 @@ export default function App() {
     }
 
     lastSyncedJson.current = currentJson;
-    pushWarehouseStateToCloud(items, balances, transactions, users).catch((err) => {
-      console.error("Failed to push state to cloud:", err);
-    });
+    pushWarehouseStateToCloud(items, balances, transactions, users)
+      .then((res) => {
+        if (res && res.isQuota) {
+          setIsQuotaExceededWarning(true);
+          setSyncStatusToast({
+            text: "⚠️ Item deleted in browser storage, but Google Cloud Firestore blocked the write because daily write quota (20,000 writes/day) is reached on project gen-lang-client-0854843540. Upgrade to Blaze plan to sync to mobile devices immediately.",
+            isError: true,
+          });
+          setTimeout(() => setSyncStatusToast(null), 10000);
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to push state to cloud:", err);
+      });
   }, [items, balances, transactions, users]);
 
   // Helper functions

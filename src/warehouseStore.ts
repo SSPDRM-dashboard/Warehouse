@@ -268,7 +268,7 @@ export async function pushWarehouseStateToCloud(
   balances: Balance[],
   transactions: Transaction[],
   users: UserAccount[]
-): Promise<void> {
+): Promise<{ success: boolean; isQuota?: boolean; error?: string }> {
   // Always save to localStorage first so local operations are never blocked
   try {
     localStorage.setItem("wh_items", JSON.stringify(items));
@@ -297,6 +297,7 @@ export async function pushWarehouseStateToCloud(
     // Direct Cloud Write Succeeded! Clear any quota or pending flags
     setFirestoreQuotaExceeded(false);
     setPendingCloudSync(false);
+    return { success: true };
   } catch (error) {
     const isQuota =
       error instanceof Error &&
@@ -306,8 +307,10 @@ export async function pushWarehouseStateToCloud(
       setFirestoreQuotaExceeded(true);
       setPendingCloudSync(true);
       console.warn("Firestore write quota reached. Local copy preserved safely in Local Storage with pending sync flagged.");
+      return { success: false, isQuota: true };
     } else {
       handleFirestoreError(error, OperationType.WRITE, `${STATE_COLLECTION}/${STATE_DOC}`);
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
     }
   }
 }

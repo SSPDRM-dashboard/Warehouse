@@ -353,16 +353,54 @@ export default function App() {
         if (res && res.isQuota) {
           setIsQuotaExceededWarning(true);
           setSyncStatusToast({
-            text: "⚠️ Item deleted in browser storage, but Google Cloud Firestore blocked the write because daily write quota (20,000 writes/day) is reached on project gen-lang-client-0854843540. Upgrade to Blaze plan to sync to mobile devices immediately.",
+            text: "⚠️ Local change saved in browser storage, but Google Cloud Firestore daily write quota (20,000 writes/day) is reached. Auto-sync is active and will push to cloud automatically once quota resets or Blaze is enabled.",
             isError: true,
           });
-          setTimeout(() => setSyncStatusToast(null), 10000);
+          setTimeout(() => setSyncStatusToast(null), 8000);
         }
       })
       .catch((err) => {
         console.error("Failed to push state to cloud:", err);
       });
   }, [items, balances, transactions, users]);
+
+  // Automated Background Auto-Sync Engine
+  useEffect(() => {
+    const autoSyncInterval = setInterval(async () => {
+      if (hasPendingCloudSync()) {
+        const res = await retryPendingCloudSync();
+        if (res.success) {
+          setIsQuotaExceededWarning(false);
+          setSyncStatusToast({
+            text: "⚡ Auto-Sync Success: Local changes successfully synced to Cloud Firestore!",
+          });
+          setTimeout(() => setSyncStatusToast(null), 5000);
+        }
+      }
+    }, 15000);
+
+    const handleFocusOrOnline = async () => {
+      if (hasPendingCloudSync()) {
+        const res = await retryPendingCloudSync();
+        if (res.success) {
+          setIsQuotaExceededWarning(false);
+          setSyncStatusToast({
+            text: "⚡ Auto-Sync Success: Local changes successfully synced to Cloud Firestore!",
+          });
+          setTimeout(() => setSyncStatusToast(null), 5000);
+        }
+      }
+    };
+
+    window.addEventListener("focus", handleFocusOrOnline);
+    window.addEventListener("online", handleFocusOrOnline);
+
+    return () => {
+      clearInterval(autoSyncInterval);
+      window.removeEventListener("focus", handleFocusOrOnline);
+      window.removeEventListener("online", handleFocusOrOnline);
+    };
+  }, []);
 
   // Helper functions
   const stock = (code: string, loc?: string) => {

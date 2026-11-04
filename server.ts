@@ -36,6 +36,36 @@ async function startServer() {
     },
   });
 
+  let inMemoryServerState: any = null;
+
+  // Real-time server sync endpoint to bridge Google Studio & Vercel
+  app.get("/api/sync-state", (req, res) => {
+    if (inMemoryServerState) {
+      return res.json({ success: true, data: inMemoryServerState });
+    }
+    return res.json({ success: false, message: "No server state cached yet" });
+  });
+
+  app.post("/api/sync-state", (req, res) => {
+    try {
+      const { items, balances, transactions, users } = req.body;
+      if (Array.isArray(items) && Array.isArray(balances)) {
+        inMemoryServerState = {
+          items,
+          balances,
+          transactions: Array.isArray(transactions) ? transactions : [],
+          users: Array.isArray(users) ? users : [],
+          updatedAt: new Date().toISOString(),
+          version: Date.now(),
+        };
+        return res.json({ success: true, message: "State saved to server memory", version: inMemoryServerState.version });
+      }
+      return res.status(400).json({ error: "Invalid data payload" });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
   // API endpoint for AI stock forecasting & inventory intelligence
   app.post("/api/ai-forecast", async (req, res) => {
     try {

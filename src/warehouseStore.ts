@@ -280,6 +280,15 @@ export async function pushWarehouseStateToCloud(
     // ignore quota issues
   }
 
+  // Direct server memory backup route
+  try {
+    fetch("/api/sync-state", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items, balances, transactions, users }),
+    }).catch(() => {});
+  } catch {}
+
   const docRef = doc(db, STATE_COLLECTION, STATE_DOC);
   const payload: WarehouseStateData = {
     items,
@@ -368,16 +377,48 @@ export async function retryPendingCloudSync(): Promise<{ success: boolean; messa
   }
 }
 
-// Force a direct fetch of the latest cloud database state directly from Firestore server
+// Force a direct fetch of the latest cloud database state directly from Firestore server or server bridge
 export async function pullLatestFromCloud(): Promise<WarehouseStateData> {
   resetQuotaCache();
   await enableFirestoreNetwork();
-  const docRef = doc(db, STATE_COLLECTION, STATE_DOC);
-  const snap = await getDocFromServer(docRef);
-  if (!snap.exists()) {
-    throw new Error("No warehouse document found in Cloud Firestore.");
+
+  let serverData: Partial<WarehouseStateData> | null = null;
+
+  try {
+    const res = await fetch("/api/sync-state");
+    if (res.ok) {
+      const json = await res.json();
+      if (json.success && json.data) {
+        serverData = json.data;
+      }
+    }
+  } catch {}
+
+  let data: Partial<WarehouseStateData> = {};
+
+  try {
+    const docRef = doc(db, STATE_COLLECTION, STATE_DOC);
+    const snap = await getDocFromServer(docRef);
+    if (snap.exists()) {
+      data = snap.data() as Partial<WarehouseStateData>;
+    }
+  } catch (err) {
+    if (serverData) {
+      data = serverData;
+    } else {
+      throw err;
+    }
   }
-  const data = snap.data() as Partial<WarehouseStateData>;
+
+  // Use whichever source has data (prefer server memory if version is newer)
+  if (serverData && serverData.version && typeof data.version === "number") {
+    if (serverData.version > data.version) {
+      data = serverData;
+    }
+  } else if (serverData && (!data.items || !data.items.length)) {
+    data = serverData;
+  }
+
   const cleanData: WarehouseStateData = {
     items: Array.isArray(data.items) ? data.items : seedItems,
     balances: Array.isArray(data.balances) ? data.balances : initialBalances,

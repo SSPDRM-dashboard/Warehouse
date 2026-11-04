@@ -64,7 +64,14 @@ import { defaultUsers } from "./defaultUsers";
 import { seedItems, initialBalances, initialTransactions } from "./mockData";
 import { SyncBackupModal } from "./SyncBackupModal";
 import { DailyReportsView } from "./DailyReportsView";
-import { subscribeToWarehouseState, pushWarehouseStateToCloud, isFirestoreQuotaExceeded } from "./warehouseStore";
+import {
+  subscribeToWarehouseState,
+  pushWarehouseStateToCloud,
+  isFirestoreQuotaExceeded,
+  hasPendingCloudSync,
+  retryPendingCloudSync,
+  pullLatestFromCloud,
+} from "./warehouseStore";
 import { LoginView } from "./LoginView";
 import { SettingsView } from "./SettingsView";
 import { SendToVAView } from "./SendToVAView";
@@ -278,6 +285,8 @@ export default function App() {
   const isInitialCloudSyncDone = useRef(false);
   const lastSyncedJson = useRef("");
   const [isQuotaExceededWarning, setIsQuotaExceededWarning] = useState(() => isFirestoreQuotaExceeded());
+  const [syncStatusToast, setSyncStatusToast] = useState<{ text: string; isError?: boolean } | null>(null);
+  const [isRetryingSync, setIsRetryingSync] = useState(false);
 
   useEffect(() => {
     // If cloud response is delayed or offline, enable local sync after 1.5 seconds
@@ -288,6 +297,7 @@ export default function App() {
     const unsubscribe = subscribeToWarehouseState(
       (cloudData) => {
         clearTimeout(fallbackTimer);
+        setIsQuotaExceededWarning(false);
         isRemoteUpdate.current = true;
         isInitialCloudSyncDone.current = true;
         lastSyncedJson.current = JSON.stringify({
@@ -569,11 +579,14 @@ export default function App() {
           <div className="flex items-center gap-3 flex-wrap">
             {isQuotaExceededWarning ? (
               <div
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 border border-amber-300 text-amber-900 rounded-lg text-xs font-semibold shadow-2xs"
+                className="flex items-center gap-2 px-3 py-1.5 bg-amber-50 border border-amber-300 text-amber-900 rounded-lg text-xs font-semibold shadow-2xs"
                 title="Firestore daily free tier quota reached. Data is safely stored in local browser storage and will sync automatically once quota resets tomorrow."
               >
                 <AlertTriangle size={13} className="text-amber-600 shrink-0" />
-                <span>Local Storage Mode (Cloud Quota Reset Tomorrow)</span>
+                <span>
+                  Local Storage Mode{" "}
+                  {hasPendingCloudSync() ? "(Changes Saved • Auto-Sync on Refresh)" : "(Cloud Quota Reset Tomorrow)"}
+                </span>
               </div>
             ) : (
               <div className="hidden xl:flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-xs font-medium">
@@ -654,32 +667,57 @@ export default function App() {
 
         <div className="p-6 max-w-[1400px] w-full mx-auto flex-1 space-y-4">
           {isQuotaExceededWarning && (
-            <div className="bg-amber-50 border border-amber-300 text-amber-950 p-3.5 rounded-2xl flex items-center justify-between text-xs gap-3 shadow-2xs">
-              <div className="flex items-start gap-2.5">
-                <AlertTriangle size={16} className="text-amber-600 mt-0.5 shrink-0" />
+            <div className="bg-amber-50 border border-amber-300 text-amber-950 p-4 rounded-2xl flex flex-col md:flex-row items-start md:items-center justify-between text-xs gap-4 shadow-2xs">
+              <div className="flex items-start gap-3">
+                <AlertTriangle size={18} className="text-amber-600 mt-0.5 shrink-0" />
                 <div>
-                  <p className="font-bold text-amber-950">
+                  <p className="font-bold text-amber-950 text-sm flex items-center gap-2">
                     Operating in Local Storage Mode (Cloud Firestore Daily Quota Reached)
+                    {hasPendingCloudSync() && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-200 text-amber-900 border border-amber-300">
+                        Pending Cloud Upload
+                      </span>
+                    )}
                   </p>
-                  <p className="text-amber-800 mt-0.5 leading-relaxed">
-                    The free Spark plan has daily limits (50,000 reads and 20,000 writes/day), which resets daily at midnight PST. All inventory items, batches, receiving transactions, and catalog edits remain 100% functional and are safely saved in local storage.
+                  <p className="text-amber-900 mt-1 leading-relaxed">
+                    <strong>Will your changes be updated when quota refreshes? YES!</strong> Any changes you make now (receiving, kitting, editing batches, stock adjustments) are safely saved in your browser&apos;s storage. As soon as your Firebase quota resets at midnight PST (or if you upgrade to Blaze), the system will automatically upload all pending changes to Cloud Firestore so all your mobile phones and computers are synchronized.
                   </p>
-                  <div className="mt-1.5 flex items-center gap-3">
+                  <div className="mt-2.5 flex items-center gap-4 flex-wrap">
+                    <button
+                      type="button"
+                      disabled={isRetryingSync}
+                      onClick={async () => {
+                        setIsRetryingSync(true);
+                        const res = await retryPendingCloudSync();
+                        setIsRetryingSync(false);
+                        if (res.success) {
+                          setIsQuotaExceededWarning(false);
+                          setSyncStatusToast({ text: "Success: All local changes have been uploaded to Cloud Firestore!" });
+                        } else {
+                          setSyncStatusToast({ text: res.message, isError: true });
+                        }
+                        setTimeout(() => setSyncStatusToast(null), 6000);
+                      }}
+                      className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-xs shadow-2xs transition disabled:opacity-50 flex items-center gap-1.5"
+                    >
+                      <RefreshCw size={13} className={isRetryingSync ? "animate-spin" : ""} />
+                      {isRetryingSync ? "Checking Quota & Syncing..." : "Check Quota & Sync to Cloud Now"}
+                    </button>
                     <a
-                      href="https://console.firebase.google.com/project/gen-lang-client-0854843540/firestore/databases/ai-studio-warehouseosinven-1fe2a63b-176f-4156-b26b-f21e50145268/data?openUpgradeDialog=true"
+                      href="https://console.firebase.google.com/project/gen-lang-client-0854843540/firestore/databases/ai-studio-warehouseosinven-1fe2a63b-176f-4156-b26b-f21e50145268/usage"
                       target="_blank"
                       rel="noopener noreferrer"
                       className="font-bold text-[#1a5695] underline hover:text-[#123e6b]"
                     >
-                      Upgrade Firebase Plan (Blaze Pay-as-you-go) &rarr;
+                      Check Live Quota Usage &rarr;
                     </a>
                     <a
-                      href="https://firebase.google.com/pricing#cloud-firestore"
+                      href="https://console.firebase.google.com/project/gen-lang-client-0854843540/firestore/databases/ai-studio-warehouseosinven-1fe2a63b-176f-4156-b26b-f21e50145268/data?openUpgradeDialog=true"
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-amber-900 underline hover:text-black"
+                      className="font-bold text-emerald-700 underline hover:text-emerald-900"
                     >
-                      Pricing details
+                      Upgrade to Blaze (Pay-as-you-go) &rarr;
                     </a>
                   </div>
                 </div>
@@ -687,10 +725,25 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setIsQuotaExceededWarning(false)}
-                className="text-amber-800 hover:text-amber-950 font-bold px-2 py-1 hover:bg-amber-100 rounded-lg cursor-pointer shrink-0"
+                className="text-amber-800 hover:text-amber-950 font-bold px-2 py-1 hover:bg-amber-100 rounded-lg cursor-pointer shrink-0 self-start md:self-center"
                 title="Dismiss message"
               >
                 ✕
+              </button>
+            </div>
+          )}
+
+          {syncStatusToast && (
+            <div
+              className={`p-3 rounded-xl text-xs font-semibold flex items-center justify-between border ${
+                syncStatusToast.isError
+                  ? "bg-amber-100 text-amber-950 border-amber-300"
+                  : "bg-emerald-100 text-emerald-950 border-emerald-300"
+              }`}
+            >
+              <span>{syncStatusToast.text}</span>
+              <button onClick={() => setSyncStatusToast(null)} className="p-1 hover:opacity-70">
+                <X size={14} />
               </button>
             </div>
           )}
@@ -725,6 +778,10 @@ export default function App() {
                   setPage={setPage}
                   onOpenSyncModal={() => setIsSyncModalOpen(true)}
                   onRestoreData={handleRestoreData}
+                  onShowToast={(msg, isErr) => {
+                    setSyncStatusToast({ text: msg, isError: isErr });
+                    setTimeout(() => setSyncStatusToast(null), 6000);
+                  }}
                 />
               </div>
               <div className={page === "items" ? "block space-y-6" : "hidden"}>
@@ -907,6 +964,7 @@ function DashboardView({
   setPage,
   onOpenSyncModal,
   onRestoreData,
+  onShowToast,
 }: {
   items: Item[];
   balances: Balance[];
@@ -914,7 +972,9 @@ function DashboardView({
   setPage: (p: Page) => void;
   onOpenSyncModal: () => void;
   onRestoreData: (data: { items: Item[]; balances: Balance[]; transactions: Transaction[]; users?: UserAccount[] }) => void;
+  onShowToast?: (msg: string, isError?: boolean) => void;
 }) {
+  const [isPullingCloud, setIsPullingCloud] = useState(false);
   const activeItems = items.filter((i) => i.active);
   const totalUnits = balances.reduce((s, b) => s + b.qty, 0);
   const lowStockItems = items.filter(
@@ -934,7 +994,36 @@ function DashboardView({
             Real-time stock monitoring, inventory control and inbound/outbound movements.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={async () => {
+              setIsPullingCloud(true);
+              try {
+                const cloudData = await pullLatestFromCloud();
+                onRestoreData({
+                  items: cloudData.items,
+                  balances: cloudData.balances,
+                  transactions: cloudData.transactions,
+                  users: cloudData.users,
+                });
+                if (onShowToast) {
+                  onShowToast(`Cloud Sync Success: Loaded ${cloudData.items.length} parts, ${cloudData.balances.length} stock bins, and ${cloudData.transactions.length} movements directly from Firestore!`);
+                }
+              } catch (err: any) {
+                if (onShowToast) {
+                  onShowToast(`Cloud Sync error: ${err.message || String(err)}`, true);
+                }
+              } finally {
+                setIsPullingCloud(false);
+              }
+            }}
+            disabled={isPullingCloud}
+            className="flex items-center gap-2 px-3.5 py-2 bg-blue-50 hover:bg-blue-100 text-[#19518a] border border-blue-200 rounded-xl text-xs font-semibold shadow-xs transition disabled:opacity-50 cursor-pointer"
+            title="Force pull the latest records directly from Cloud Firestore"
+          >
+            <RefreshCw size={14} className={isPullingCloud ? "animate-spin text-[#2463a6]" : "text-[#2463a6]"} />
+            <span>{isPullingCloud ? "Syncing..." : "Refresh Cloud Data"}</span>
+          </button>
           <button
             onClick={() => setPage("reports")}
             className="flex items-center gap-2 px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-semibold shadow-xs transition"

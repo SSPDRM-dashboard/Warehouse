@@ -11,11 +11,15 @@ import {
   Terminal,
   AlertCircle,
   CheckCircle2,
-  Share2
+  Share2,
+  Cloud,
+  CloudDownload,
+  CloudUpload,
 } from "lucide-react";
 import { Item, Balance, Transaction, UserAccount } from "./types";
 import { seedItems, initialBalances, initialTransactions } from "./mockData";
 import { defaultUsers } from "./defaultUsers";
+import { pullLatestFromCloud, pushWarehouseStateToCloud, resetQuotaCache } from "./warehouseStore";
 
 interface SyncBackupModalProps {
   isOpen: boolean;
@@ -41,9 +45,10 @@ export function SyncBackupModal({
   users,
   onRestoreData,
 }: SyncBackupModalProps) {
-  const [activeTab, setActiveTab] = useState<"code" | "file" | "demo" | "git">("code");
+  const [activeTab, setActiveTab] = useState<"cloud" | "code" | "file" | "demo" | "git">("cloud");
   const [copied, setCopied] = useState(false);
   const [pasteCode, setPasteCode] = useState("");
+  const [isCloudLoading, setIsCloudLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   if (!isOpen) return null;
@@ -195,19 +200,62 @@ export function SyncBackupModal({
     e.target.value = "";
   };
 
-  const handleLoadDemo = () => {
-    if (confirm("Reset current warehouse data to standard sample automotive parts and transactions?")) {
+  const handlePullFromFirestore = async () => {
+    setIsCloudLoading(true);
+    setStatusMessage(null);
+    try {
+      const cloudData = await pullLatestFromCloud();
       onRestoreData({
-        items: seedItems,
-        balances: initialBalances,
-        transactions: initialTransactions,
-        users: defaultUsers,
+        items: cloudData.items,
+        balances: cloudData.balances,
+        transactions: cloudData.transactions,
+        users: cloudData.users,
       });
       setStatusMessage({
         type: "success",
-        text: "Standard demo dataset loaded with 6 parts, 5 balance locations, and transactions.",
+        text: `Successfully synced from Cloud Firestore! Loaded ${cloudData.items.length} parts, ${cloudData.balances.length} stock bins, and ${cloudData.transactions.length} movements.`,
       });
+    } catch (err: any) {
+      setStatusMessage({
+        type: "error",
+        text: `Cloud sync error: ${err.message || String(err)}`,
+      });
+    } finally {
+      setIsCloudLoading(false);
     }
+  };
+
+  const handlePushToFirestore = async () => {
+    setIsCloudLoading(true);
+    setStatusMessage(null);
+    try {
+      resetQuotaCache();
+      await pushWarehouseStateToCloud(items, balances, transactions, users);
+      setStatusMessage({
+        type: "success",
+        text: `Successfully uploaded ${items.length} parts, ${balances.length} stock bins, and ${transactions.length} movements to Cloud Firestore!`,
+      });
+    } catch (err: any) {
+      setStatusMessage({
+        type: "error",
+        text: `Cloud upload error: ${err.message || String(err)}`,
+      });
+    } finally {
+      setIsCloudLoading(false);
+    }
+  };
+
+  const handleLoadDemo = () => {
+    onRestoreData({
+      items: seedItems,
+      balances: initialBalances,
+      transactions: initialTransactions,
+      users: defaultUsers,
+    });
+    setStatusMessage({
+      type: "success",
+      text: "Standard demo dataset loaded with 6 parts, 5 balance locations, and transactions.",
+    });
   };
 
   return (
@@ -256,10 +304,20 @@ export function SyncBackupModal({
         )}
 
         {/* Tabs */}
-        <div className="flex border-b border-[#dfe6ee] bg-[#f7f9fc] px-6 pt-2 gap-2 text-xs font-semibold">
+        <div className="flex border-b border-[#dfe6ee] bg-[#f7f9fc] px-6 pt-2 gap-2 text-xs font-semibold overflow-x-auto">
+          <button
+            onClick={() => setActiveTab("cloud")}
+            className={`pb-3 px-3 border-b-2 flex items-center gap-1.5 transition whitespace-nowrap ${
+              activeTab === "cloud"
+                ? "border-[#2463a6] text-[#2463a6]"
+                : "border-transparent text-[#65768a] hover:text-[#18324d]"
+            }`}
+          >
+            <Cloud size={14} /> Cloud Firestore (Live)
+          </button>
           <button
             onClick={() => setActiveTab("code")}
-            className={`pb-3 px-3 border-b-2 flex items-center gap-1.5 transition ${
+            className={`pb-3 px-3 border-b-2 flex items-center gap-1.5 transition whitespace-nowrap ${
               activeTab === "code"
                 ? "border-[#2463a6] text-[#2463a6]"
                 : "border-transparent text-[#65768a] hover:text-[#18324d]"
@@ -269,7 +327,7 @@ export function SyncBackupModal({
           </button>
           <button
             onClick={() => setActiveTab("file")}
-            className={`pb-3 px-3 border-b-2 flex items-center gap-1.5 transition ${
+            className={`pb-3 px-3 border-b-2 flex items-center gap-1.5 transition whitespace-nowrap ${
               activeTab === "file"
                 ? "border-[#2463a6] text-[#2463a6]"
                 : "border-transparent text-[#65768a] hover:text-[#18324d]"
@@ -279,7 +337,7 @@ export function SyncBackupModal({
           </button>
           <button
             onClick={() => setActiveTab("demo")}
-            className={`pb-3 px-3 border-b-2 flex items-center gap-1.5 transition ${
+            className={`pb-3 px-3 border-b-2 flex items-center gap-1.5 transition whitespace-nowrap ${
               activeTab === "demo"
                 ? "border-[#2463a6] text-[#2463a6]"
                 : "border-transparent text-[#65768a] hover:text-[#18324d]"
@@ -289,7 +347,7 @@ export function SyncBackupModal({
           </button>
           <button
             onClick={() => setActiveTab("git")}
-            className={`pb-3 px-3 border-b-2 flex items-center gap-1.5 transition ${
+            className={`pb-3 px-3 border-b-2 flex items-center gap-1.5 transition whitespace-nowrap ${
               activeTab === "git"
                 ? "border-[#2463a6] text-[#2463a6]"
                 : "border-transparent text-[#65768a] hover:text-[#18324d]"
@@ -301,6 +359,62 @@ export function SyncBackupModal({
 
         {/* Content Body */}
         <div className="p-6 overflow-y-auto space-y-5 text-xs text-[#42566c] flex-1">
+          {activeTab === "cloud" && (
+            <div className="space-y-4">
+              <div className="bg-blue-50/50 border border-blue-200/80 rounded-2xl p-4 text-xs space-y-2">
+                <div className="flex items-center gap-2 font-bold text-[#18324d] text-sm">
+                  <Cloud size={16} className="text-[#2463a6]" />
+                  <span>Connected Cloud Firestore Database</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-[#42566c]">
+                  <div><span className="font-semibold text-[#18324d]">Project ID:</span> <code className="font-mono bg-white px-1.5 py-0.5 rounded border border-blue-200">gen-lang-client-0854843540</code></div>
+                  <div><span className="font-semibold text-[#18324d]">Current Local:</span> {items.length} parts • {balances.length} bins • {transactions.length} movements</div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="bg-white border border-[#dfe6ee] rounded-2xl p-5 shadow-xs space-y-3 flex flex-col justify-between">
+                  <div>
+                    <div className="w-9 h-9 rounded-xl bg-blue-50 text-[#2463a6] flex items-center justify-center mb-2">
+                      <CloudDownload size={20} />
+                    </div>
+                    <h4 className="font-bold text-[#18324d] text-sm">Pull / Download from Cloud</h4>
+                    <p className="text-xs text-[#65768a] mt-1 leading-relaxed">
+                      Download the latest database records stored in Cloud Firestore. Use this on your web browser or Vercel if it is showing older records.
+                    </p>
+                  </div>
+                  <button
+                    onClick={handlePullFromFirestore}
+                    disabled={isCloudLoading}
+                    className="w-full py-2.5 px-4 bg-[#2463a6] hover:bg-[#1a4f88] text-white rounded-xl font-bold flex items-center justify-center gap-2 transition disabled:opacity-50 cursor-pointer shadow-xs"
+                  >
+                    <RefreshCw size={14} className={isCloudLoading ? "animate-spin" : ""} />
+                    <span>{isCloudLoading ? "Pulling Data..." : "Pull Latest from Cloud Now"}</span>
+                  </button>
+                </div>
+
+                <div className="bg-white border border-[#dfe6ee] rounded-2xl p-5 shadow-xs space-y-3 flex flex-col justify-between">
+                  <div>
+                    <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center mb-2">
+                      <CloudUpload size={20} />
+                    </div>
+                    <h4 className="font-bold text-[#18324d] text-sm">Push / Upload to Cloud</h4>
+                    <p className="text-xs text-[#65768a] mt-1 leading-relaxed">
+                      Upload your current screen data ({items.length} parts, {balances.length} stock bins, {transactions.length} movements) up to Cloud Firestore.
+                    </p>
+                  </div>
+                  <button
+                    onClick={handlePushToFirestore}
+                    disabled={isCloudLoading}
+                    className="w-full py-2.5 px-4 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl font-bold flex items-center justify-center gap-2 transition disabled:opacity-50 cursor-pointer shadow-xs"
+                  >
+                    <Upload size={14} className={isCloudLoading ? "animate-spin" : ""} />
+                    <span>{isCloudLoading ? "Uploading..." : "Push Local Data to Cloud"}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           {activeTab === "code" && (
             <div className="space-y-4">
               <div className="bg-white border border-[#dfe6ee] rounded-xl p-4 shadow-xs space-y-3">

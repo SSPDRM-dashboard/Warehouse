@@ -1,4 +1,4 @@
-import { doc, onSnapshot, setDoc, getDoc } from "firebase/firestore";
+import { doc, onSnapshot, setDoc, getDoc, getDocFromServer } from "firebase/firestore";
 import { db, handleFirestoreError, OperationType, testConnection } from "./firebase";
 import { Item, Balance, Transaction, UserAccount } from "./types";
 import { seedItems, initialBalances, initialTransactions } from "./mockData";
@@ -104,40 +104,52 @@ export function resetQuotaCache() {
   } catch {}
 }
 
+export const PENDING_SYNC_KEY = "wh_pending_cloud_sync";
+export const LOCAL_MODIFIED_KEY = "wh_local_last_modified";
+
+export function hasPendingCloudSync(): boolean {
+  try {
+    return localStorage.getItem(PENDING_SYNC_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function setPendingCloudSync(pending: boolean) {
+  try {
+    if (pending) {
+      localStorage.setItem(PENDING_SYNC_KEY, "true");
+      localStorage.setItem(LOCAL_MODIFIED_KEY, Date.now().toString());
+    } else {
+      localStorage.removeItem(PENDING_SYNC_KEY);
+    }
+  } catch {}
+}
+
 // Subscribes to real-time warehouse data changes from Firestore
 export function subscribeToWarehouseState(
   onData: (data: WarehouseStateData) => void,
   onError?: (err: unknown) => void
 ): () => void {
-  // If quota was already exceeded today, skip Firestore network calls to prevent failing requests
-  if (isFirestoreQuotaExceeded()) {
-    console.info("Firestore daily quota is currently reached. Operating in Local Storage mode.");
-    try {
-      const localItems = localStorage.getItem("wh_items");
-      const localBalances = localStorage.getItem("wh_balances");
-      const localTransactions = localStorage.getItem("wh_transactions");
-      const localUsers = localStorage.getItem("wh_users");
+  // First, immediately provide fast local cached state so UI is never blank
+  try {
+    const localItems = localStorage.getItem("wh_items");
+    const localBalances = localStorage.getItem("wh_balances");
+    const localTransactions = localStorage.getItem("wh_transactions");
+    const localUsers = localStorage.getItem("wh_users");
+    if (localItems && localBalances && localTransactions) {
       onData({
-        items: localItems ? JSON.parse(localItems) : seedItems,
-        balances: localBalances ? JSON.parse(localBalances) : initialBalances,
-        transactions: localTransactions ? JSON.parse(localTransactions) : initialTransactions,
+        items: JSON.parse(localItems),
+        balances: JSON.parse(localBalances),
+        transactions: JSON.parse(localTransactions),
         users: localUsers ? JSON.parse(localUsers) : defaultUsers,
         updatedAt: new Date().toISOString(),
         sourceDevice: "Local Storage Mode",
         version: 1,
       });
-    } catch {
-      onData({
-        items: seedItems,
-        balances: initialBalances,
-        transactions: initialTransactions,
-        users: defaultUsers,
-        updatedAt: new Date().toISOString(),
-        sourceDevice: "Local Storage Mode (Default)",
-        version: 1,
-      });
     }
-    return () => {};
+  } catch (e) {
+    console.warn("Could not load initial local cached state:", e);
   }
 
   const docRef = doc(db, STATE_COLLECTION, STATE_DOC);
@@ -149,6 +161,9 @@ export function subscribeToWarehouseState(
     docRef,
     async (snapshot) => {
       try {
+        // If snapshot succeeded, billing is active and quota is NOT exceeded!
+        setFirestoreQuotaExceeded(false);
+
         if (snapshot.exists()) {
           const data = snapshot.data() as Partial<WarehouseStateData>;
           const cleanData: WarehouseStateData = {
@@ -160,6 +175,50 @@ export function subscribeToWarehouseState(
             sourceDevice: data.sourceDevice || "Cloud",
             version: typeof data.version === "number" ? data.version : 1,
           };
+
+          // Check if this device made offline changes while the quota was exceeded
+          const hasPending = hasPendingCloudSync();
+          if (hasPending) {
+            try {
+              const rawLocalItems = localStorage.getItem("wh_items");
+              const rawLocalBalances = localStorage.getItem("wh_balances");
+              const rawLocalTransactions = localStorage.getItem("wh_transactions");
+              const rawLocalUsers = localStorage.getItem("wh_users");
+
+              if (rawLocalItems && rawLocalBalances && rawLocalTransactions) {
+                const localItems = JSON.parse(rawLocalItems);
+                const localBalances = JSON.parse(rawLocalBalances);
+                const localTransactions = JSON.parse(rawLocalTransactions);
+                const localUsers = rawLocalUsers ? JSON.parse(rawLocalUsers) : defaultUsers;
+
+                console.info("Quota refreshed! Uploading pending local changes made during offline quota period to Cloud...");
+                // Keep the user's latest local edits in the UI
+                onData({
+                  items: localItems,
+                  balances: localBalances,
+                  transactions: localTransactions,
+                  users: localUsers,
+                  updatedAt: new Date().toISOString(),
+                  sourceDevice: getDeviceInfo() + " (Auto-synced)",
+                  version: Date.now(),
+                });
+
+                // Push them up to Firestore now that quota is available
+                pushWarehouseStateToCloud(localItems, localBalances, localTransactions, localUsers)
+                  .then(() => {
+                    setPendingCloudSync(false);
+                    console.info("Successfully synced offline pending changes to Cloud Firestore!");
+                  })
+                  .catch((syncErr) => {
+                    console.warn("Could not sync pending changes to cloud yet:", syncErr);
+                  });
+
+                return;
+              }
+            } catch (mergeErr) {
+              console.warn("Error reading local changes during quota recovery:", mergeErr);
+            }
+          }
 
           // Save local backup
           try {
@@ -244,12 +303,14 @@ export async function pushWarehouseStateToCloud(
     localStorage.setItem("wh_balances", JSON.stringify(balances));
     localStorage.setItem("wh_transactions", JSON.stringify(transactions));
     localStorage.setItem("wh_users", JSON.stringify(users));
+    localStorage.setItem(LOCAL_MODIFIED_KEY, Date.now().toString());
   } catch {
     // ignore quota issues
   }
 
-  // If quota was already marked exceeded, avoid spamming rejected network calls
+  // If quota was already marked exceeded, mark that we have pending local changes to upload later!
   if (isFirestoreQuotaExceeded()) {
+    setPendingCloudSync(true);
     return;
   }
 
@@ -267,6 +328,8 @@ export async function pushWarehouseStateToCloud(
   try {
     const firestoreData = cleanForFirestore(payload);
     await setDoc(docRef, firestoreData);
+    // Write succeeded, clear pending sync flag
+    setPendingCloudSync(false);
   } catch (error) {
     const isQuota =
       error instanceof Error &&
@@ -274,9 +337,95 @@ export async function pushWarehouseStateToCloud(
 
     if (isQuota) {
       setFirestoreQuotaExceeded(true);
-      console.warn("Firestore write quota reached. Local copy preserved safely in Local Storage.");
+      setPendingCloudSync(true);
+      console.warn("Firestore write quota reached. Local copy preserved safely in Local Storage with pending sync flagged.");
     } else {
       handleFirestoreError(error, OperationType.WRITE, `${STATE_COLLECTION}/${STATE_DOC}`);
     }
   }
+}
+
+// Manually trigger a retry to push local pending state to cloud (e.g. after quota refresh or Blaze upgrade)
+export async function retryPendingCloudSync(): Promise<{ success: boolean; message: string }> {
+  try {
+    resetQuotaCache();
+    const rawItems = localStorage.getItem("wh_items");
+    const rawBalances = localStorage.getItem("wh_balances");
+    const rawTransactions = localStorage.getItem("wh_transactions");
+    const rawUsers = localStorage.getItem("wh_users");
+
+    if (!rawItems || !rawBalances || !rawTransactions) {
+      return { success: false, message: "No local warehouse data found to sync." };
+    }
+
+    const items = JSON.parse(rawItems);
+    const balances = JSON.parse(rawBalances);
+    const transactions = JSON.parse(rawTransactions);
+    const users = rawUsers ? JSON.parse(rawUsers) : defaultUsers;
+
+    const docRef = doc(db, STATE_COLLECTION, STATE_DOC);
+    const payload: WarehouseStateData = {
+      items,
+      balances,
+      transactions,
+      users,
+      updatedAt: new Date().toISOString(),
+      sourceDevice: getDeviceInfo() + " (Manual Retry)",
+      version: Date.now(),
+    };
+
+    await setDoc(docRef, cleanForFirestore(payload));
+    setPendingCloudSync(false);
+    setFirestoreQuotaExceeded(false);
+    return { success: true, message: "All local changes successfully uploaded to Cloud Firestore!" };
+  } catch (err) {
+    const isQuota =
+      err instanceof Error &&
+      (err.message.includes("Quota exceeded") || (err as any)?.code === "resource-exhausted");
+    if (isQuota) {
+      setFirestoreQuotaExceeded(true);
+      setPendingCloudSync(true);
+      return {
+        success: false,
+        message: "Quota is still exceeded on Firebase. Local changes are safe in browser storage and will retry later.",
+      };
+    }
+    return {
+      success: false,
+      message: err instanceof Error ? err.message : "Cloud sync failed.",
+    };
+  }
+}
+
+// Force a direct fetch of the latest cloud database state directly from Firestore server
+export async function pullLatestFromCloud(): Promise<WarehouseStateData> {
+  resetQuotaCache();
+  const docRef = doc(db, STATE_COLLECTION, STATE_DOC);
+  const snap = await getDocFromServer(docRef);
+  if (!snap.exists()) {
+    throw new Error("No warehouse document found in Cloud Firestore.");
+  }
+  const data = snap.data() as Partial<WarehouseStateData>;
+  const cleanData: WarehouseStateData = {
+    items: Array.isArray(data.items) ? data.items : seedItems,
+    balances: Array.isArray(data.balances) ? data.balances : initialBalances,
+    transactions: Array.isArray(data.transactions) ? data.transactions : initialTransactions,
+    users: Array.isArray(data.users) && data.users.length ? data.users : defaultUsers,
+    updatedAt: data.updatedAt || new Date().toISOString(),
+    sourceDevice: data.sourceDevice || "Cloud",
+    version: typeof data.version === "number" ? data.version : Date.now(),
+  };
+
+  try {
+    localStorage.setItem("wh_items", JSON.stringify(cleanData.items));
+    localStorage.setItem("wh_balances", JSON.stringify(cleanData.balances));
+    localStorage.setItem("wh_transactions", JSON.stringify(cleanData.transactions));
+    localStorage.setItem("wh_users", JSON.stringify(cleanData.users));
+    setPendingCloudSync(false);
+    setFirestoreQuotaExceeded(false);
+  } catch (e) {
+    console.warn("Could not save to localStorage", e);
+  }
+
+  return cleanData;
 }

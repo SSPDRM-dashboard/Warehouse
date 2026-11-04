@@ -1,5 +1,5 @@
 import { doc, onSnapshot, setDoc, getDoc, getDocFromServer } from "firebase/firestore";
-import { db, handleFirestoreError, OperationType, testConnection } from "./firebase";
+import { db, handleFirestoreError, OperationType, testConnection, disableFirestoreNetwork, enableFirestoreNetwork } from "./firebase";
 import { Item, Balance, Transaction, UserAccount } from "./types";
 import { seedItems, initialBalances, initialTransactions } from "./mockData";
 import { defaultUsers } from "./defaultUsers";
@@ -157,7 +157,9 @@ export function subscribeToWarehouseState(
   // Test connection on startup
   testConnection();
 
-  const unsubscribe = onSnapshot(
+  let activeUnsubscribe: (() => void) | null = null;
+
+  activeUnsubscribe = onSnapshot(
     docRef,
     async (snapshot) => {
       try {
@@ -176,56 +178,13 @@ export function subscribeToWarehouseState(
             version: typeof data.version === "number" ? data.version : 1,
           };
 
-          // Check if this device made offline changes while the quota was exceeded
-          const hasPending = hasPendingCloudSync();
-          if (hasPending) {
-            try {
-              const rawLocalItems = localStorage.getItem("wh_items");
-              const rawLocalBalances = localStorage.getItem("wh_balances");
-              const rawLocalTransactions = localStorage.getItem("wh_transactions");
-              const rawLocalUsers = localStorage.getItem("wh_users");
-
-              if (rawLocalItems && rawLocalBalances && rawLocalTransactions) {
-                const localItems = JSON.parse(rawLocalItems);
-                const localBalances = JSON.parse(rawLocalBalances);
-                const localTransactions = JSON.parse(rawLocalTransactions);
-                const localUsers = rawLocalUsers ? JSON.parse(rawLocalUsers) : defaultUsers;
-
-                console.info("Quota refreshed! Uploading pending local changes made during offline quota period to Cloud...");
-                // Keep the user's latest local edits in the UI
-                onData({
-                  items: localItems,
-                  balances: localBalances,
-                  transactions: localTransactions,
-                  users: localUsers,
-                  updatedAt: new Date().toISOString(),
-                  sourceDevice: getDeviceInfo() + " (Auto-synced)",
-                  version: Date.now(),
-                });
-
-                // Push them up to Firestore now that quota is available
-                pushWarehouseStateToCloud(localItems, localBalances, localTransactions, localUsers)
-                  .then(() => {
-                    setPendingCloudSync(false);
-                    console.info("Successfully synced offline pending changes to Cloud Firestore!");
-                  })
-                  .catch((syncErr) => {
-                    console.warn("Could not sync pending changes to cloud yet:", syncErr);
-                  });
-
-                return;
-              }
-            } catch (mergeErr) {
-              console.warn("Error reading local changes during quota recovery:", mergeErr);
-            }
-          }
-
-          // Save local backup
+          // Save local backup and update UI with live Cloud Firestore data
           try {
             localStorage.setItem("wh_items", JSON.stringify(cleanData.items));
             localStorage.setItem("wh_balances", JSON.stringify(cleanData.balances));
             localStorage.setItem("wh_transactions", JSON.stringify(cleanData.transactions));
             localStorage.setItem("wh_users", JSON.stringify(cleanData.users));
+            setPendingCloudSync(false);
           } catch (e) {
             console.warn("Could not save to localStorage", e);
           }
@@ -259,7 +218,14 @@ export function subscribeToWarehouseState(
 
       if (isQuota) {
         setFirestoreQuotaExceeded(true);
-        console.warn("Firestore usage quota exceeded. Operating seamlessly in offline localStorage mode.");
+        console.info("Firestore usage quota reached. Unsubscribing listener to prevent retry backoff spam.");
+
+        // Detach listener immediately so Firebase SDK stops attempting background retries
+        if (activeUnsubscribe) {
+          try {
+            activeUnsubscribe();
+          } catch {}
+        }
 
         // Fallback: load latest local backup immediately so the UI is fully populated
         try {
@@ -287,7 +253,13 @@ export function subscribeToWarehouseState(
     }
   );
 
-  return unsubscribe;
+  return () => {
+    if (activeUnsubscribe) {
+      try {
+        activeUnsubscribe();
+      } catch {}
+    }
+  };
 }
 
 // Saves warehouse state to Firestore so all handphones and computers sync immediately
@@ -308,12 +280,6 @@ export async function pushWarehouseStateToCloud(
     // ignore quota issues
   }
 
-  // If quota was already marked exceeded, mark that we have pending local changes to upload later!
-  if (isFirestoreQuotaExceeded()) {
-    setPendingCloudSync(true);
-    return;
-  }
-
   const docRef = doc(db, STATE_COLLECTION, STATE_DOC);
   const payload: WarehouseStateData = {
     items,
@@ -328,7 +294,8 @@ export async function pushWarehouseStateToCloud(
   try {
     const firestoreData = cleanForFirestore(payload);
     await setDoc(docRef, firestoreData);
-    // Write succeeded, clear pending sync flag
+    // Direct Cloud Write Succeeded! Clear any quota or pending flags
+    setFirestoreQuotaExceeded(false);
     setPendingCloudSync(false);
   } catch (error) {
     const isQuota =
@@ -349,6 +316,7 @@ export async function pushWarehouseStateToCloud(
 export async function retryPendingCloudSync(): Promise<{ success: boolean; message: string }> {
   try {
     resetQuotaCache();
+    await enableFirestoreNetwork();
     const rawItems = localStorage.getItem("wh_items");
     const rawBalances = localStorage.getItem("wh_balances");
     const rawTransactions = localStorage.getItem("wh_transactions");
@@ -400,6 +368,7 @@ export async function retryPendingCloudSync(): Promise<{ success: boolean; messa
 // Force a direct fetch of the latest cloud database state directly from Firestore server
 export async function pullLatestFromCloud(): Promise<WarehouseStateData> {
   resetQuotaCache();
+  await enableFirestoreNetwork();
   const docRef = doc(db, STATE_COLLECTION, STATE_DOC);
   const snap = await getDocFromServer(docRef);
   if (!snap.exists()) {

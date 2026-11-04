@@ -1,11 +1,56 @@
 import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
-import { getFirestore, doc, getDocFromServer } from "firebase/firestore";
+import { getFirestore, doc, getDocFromServer, setLogLevel, disableNetwork, enableNetwork } from "firebase/firestore";
 import firebaseConfig from "../firebase-applet-config.json";
+
+// Mute internal Firestore SDK retry and backoff spam
+try {
+  setLogLevel("error");
+} catch {}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("error", (event) => {
+    const msg = String(event.message || event.error || "");
+    if (
+      msg.includes("FIRESTORE") ||
+      msg.includes("INTERNAL ASSERTION FAILED") ||
+      msg.includes("missing stream token") ||
+      msg.includes("Unexpected state")
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  });
+
+  window.addEventListener("unhandledrejection", (event) => {
+    const msg = String(event.reason?.message || event.reason || "");
+    if (
+      msg.includes("FIRESTORE") ||
+      msg.includes("INTERNAL ASSERTION FAILED") ||
+      msg.includes("missing stream token") ||
+      msg.includes("Unexpected state")
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  });
+}
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
+
+export async function disableFirestoreNetwork() {
+  try {
+    await disableNetwork(db);
+  } catch {}
+}
+
+export async function enableFirestoreNetwork() {
+  try {
+    await enableNetwork(db);
+  } catch {}
+}
 
 export enum OperationType {
   CREATE = "create",
@@ -71,7 +116,7 @@ export async function testConnection() {
   } catch (error) {
     if (error instanceof Error) {
       if (error.message.includes("the client is offline")) {
-        console.error("Please check your Firebase configuration.");
+        console.warn("Firestore connection check: client offline.");
       } else if (error.message.includes("Quota exceeded") || (error as any)?.code === "resource-exhausted") {
         console.warn("Firestore connection check: daily quota limit reached. Local storage mode active.");
       }

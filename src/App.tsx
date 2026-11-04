@@ -980,8 +980,9 @@ function DashboardView({
   const lowStockItems = items.filter(
     (i) => i.active && balances.filter((b) => b.code === i.code).reduce((s, b) => s + b.qty, 0) <= i.min
   );
-  const totalReceiving = transactions.filter((t) => t.type === "Receiving" && t.status === "Posted").length;
-  const totalIssues = transactions.filter((t) => t.type === "Production Issue" && t.status === "Posted").length;
+  const totalReceiving = transactions.filter((t) => t.type === "Receiving" || t.type === "Opening Stock").length;
+  const totalIssues = transactions.filter((t) => t.type === "Production Issue" || t.type === "Sent to Operation" || t.type === "Send to VA").length;
+  const totalOther = Math.max(0, transactions.length - (totalReceiving + totalIssues));
 
   return (
     <div className="space-y-6">
@@ -1144,10 +1145,10 @@ function DashboardView({
         <div className="bg-white border border-[#dfe6ee] rounded-2xl p-5 shadow-xs">
           <div className="text-xs font-medium text-[#65768a]">Movements Posted</div>
           <div className="text-3xl font-extrabold text-[#18324d] mt-2 font-mono">
-            {totalIssues + totalReceiving}
+            {transactions.length.toLocaleString()}
           </div>
           <div className="text-xs text-[#65768a] mt-1">
-            {totalReceiving} receipts, {totalIssues} issues
+            {totalReceiving} receipts, {totalIssues} issues{totalOther > 0 ? `, ${totalOther} transfers` : ""}
           </div>
         </div>
       </div>

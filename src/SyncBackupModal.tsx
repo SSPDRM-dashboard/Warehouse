@@ -16,7 +16,7 @@ import {
   CloudDownload,
   CloudUpload,
 } from "lucide-react";
-import { Item, Balance, Transaction, UserAccount } from "./types";
+import { Item, Balance, Transaction, UserAccount, BatchType } from "./types";
 import { seedItems, initialBalances, initialTransactions } from "./mockData";
 import { defaultUsers } from "./defaultUsers";
 import { pullLatestFromCloud, pushWarehouseStateToCloud, resetQuotaCache } from "./warehouseStore";
@@ -28,11 +28,15 @@ interface SyncBackupModalProps {
   balances: Balance[];
   transactions: Transaction[];
   users: UserAccount[];
+  batchQuantities?: Record<string, number>;
+  batchTypes?: Record<string, BatchType>;
   onRestoreData: (data: {
     items: Item[];
     balances: Balance[];
     transactions: Transaction[];
     users?: UserAccount[];
+    batchQuantities?: Record<string, number>;
+    batchTypes?: Record<string, BatchType>;
   }) => void;
 }
 
@@ -43,6 +47,8 @@ export function SyncBackupModal({
   balances,
   transactions,
   users,
+  batchQuantities,
+  batchTypes,
   onRestoreData,
 }: SyncBackupModalProps) {
   const [activeTab, setActiveTab] = useState<"cloud" | "code" | "file" | "demo" | "git">("cloud");
@@ -210,10 +216,12 @@ export function SyncBackupModal({
         balances: cloudData.balances,
         transactions: cloudData.transactions,
         users: cloudData.users,
+        batchQuantities: cloudData.batchQuantities,
+        batchTypes: cloudData.batchTypes,
       });
       setStatusMessage({
         type: "success",
-        text: `Successfully synced from Cloud Firestore! Loaded ${cloudData.items.length} parts, ${cloudData.balances.length} stock bins, and ${cloudData.transactions.length} movements.`,
+        text: `Successfully synced from Cloud Firestore! Loaded ${cloudData.items.length} parts, ${cloudData.balances.length} stock bins, ${cloudData.transactions.length} movements, and live batch configurations.`,
       });
     } catch (err: any) {
       setStatusMessage({
@@ -230,7 +238,7 @@ export function SyncBackupModal({
     setStatusMessage(null);
     try {
       resetQuotaCache();
-      await pushWarehouseStateToCloud(items, balances, transactions, users);
+      await pushWarehouseStateToCloud(items, balances, transactions, users, batchQuantities, batchTypes);
       setStatusMessage({
         type: "success",
         text: `Successfully uploaded ${items.length} parts, ${balances.length} stock bins, and ${transactions.length} movements to Cloud Firestore!`,

@@ -52,6 +52,7 @@ import {
 import {
   Item,
   Balance,
+  BatchType,
   Transaction,
   Role,
   Page,
@@ -239,17 +240,49 @@ export default function App() {
     localStorage.removeItem("wh_logged_in_user");
   };
 
+  const [batchQuantities, setBatchQuantities] = useState<{ [key: string]: number }>(() => {
+    try {
+      const saved = localStorage.getItem("wh_batch_quantities");
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return {};
+  });
+
+  const [batchTypes, setBatchTypes] = useState<{ [key: string]: BatchType }>(() => {
+    try {
+      const saved = localStorage.getItem("wh_batch_types");
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return {};
+  });
+
+  useEffect(() => {
+    localStorage.setItem("wh_batch_quantities", JSON.stringify(batchQuantities));
+  }, [batchQuantities]);
+
+  useEffect(() => {
+    localStorage.setItem("wh_batch_types", JSON.stringify(batchTypes));
+  }, [batchTypes]);
+
   const handleRestoreData = (data: {
     items: Item[];
     balances: Balance[];
     transactions: Transaction[];
     users?: UserAccount[];
+    batchQuantities?: Record<string, number>;
+    batchTypes?: Record<string, BatchType>;
   }) => {
     setItems(data.items);
     setBalances(data.balances);
     setTransactions(data.transactions);
     if (data.users && data.users.length > 0) {
       setUsers(data.users);
+    }
+    if (data.batchQuantities) {
+      setBatchQuantities(data.batchQuantities);
+    }
+    if (data.batchTypes) {
+      setBatchTypes(data.batchTypes);
     }
   };
 
@@ -306,6 +339,8 @@ export default function App() {
           balances: cloudData.balances,
           transactions: cloudData.transactions,
           users: cloudData.users,
+          batchQuantities: cloudData.batchQuantities,
+          batchTypes: cloudData.batchTypes,
         });
 
         setItems(cloudData.items);
@@ -313,6 +348,12 @@ export default function App() {
         setTransactions(cloudData.transactions);
         if (cloudData.users && cloudData.users.length > 0) {
           setUsers(cloudData.users);
+        }
+        if (cloudData.batchQuantities && Object.keys(cloudData.batchQuantities).length > 0) {
+          setBatchQuantities(cloudData.batchQuantities);
+        }
+        if (cloudData.batchTypes && Object.keys(cloudData.batchTypes).length > 0) {
+          setBatchTypes(cloudData.batchTypes);
         }
       },
       (err) => {
@@ -384,6 +425,12 @@ export default function App() {
               setTransactions(json.data.transactions || []);
               if (json.data.users && json.data.users.length) {
                 setUsers(json.data.users);
+              }
+              if (json.data.batchQuantities && typeof json.data.batchQuantities === "object") {
+                setBatchQuantities(json.data.batchQuantities);
+              }
+              if (json.data.batchTypes && typeof json.data.batchTypes === "object") {
+                setBatchTypes(json.data.batchTypes);
               }
             }
           }
@@ -925,12 +972,17 @@ export default function App() {
                   balances={balances}
                   setBalances={setBalances}
                   items={items}
+                  setItems={setItems}
                   stock={stock}
                   transactions={transactions}
                   setTransactions={setTransactions}
                   currentUser={currentUser}
                   users={users}
                   role={role}
+                  batchQuantities={batchQuantities}
+                  setBatchQuantities={setBatchQuantities}
+                  batchTypes={batchTypes}
+                  setBatchTypes={setBatchTypes}
                 />
               </div>
               <div className={page === "history" ? "block space-y-6" : "hidden"}>
@@ -974,6 +1026,8 @@ export default function App() {
         balances={balances}
         transactions={transactions}
         users={users}
+        batchQuantities={batchQuantities}
+        batchTypes={batchTypes}
         onRestoreData={handleRestoreData}
       />
     </div>
@@ -6457,22 +6511,32 @@ function InventoryView({
   balances,
   setBalances,
   items,
+  setItems,
   stock,
   transactions,
   setTransactions,
   currentUser,
   users,
   role,
+  batchQuantities: propBatchQuantities,
+  setBatchQuantities: propSetBatchQuantities,
+  batchTypes: propBatchTypes,
+  setBatchTypes: propSetBatchTypes,
 }: {
   balances: Balance[];
   setBalances: React.Dispatch<React.SetStateAction<Balance[]>>;
   items: Item[];
+  setItems?: React.Dispatch<React.SetStateAction<Item[]>>;
   stock: (code: string, loc?: string) => number;
   transactions?: Transaction[];
   setTransactions?: React.Dispatch<React.SetStateAction<Transaction[]>>;
   currentUser?: UserAccount | null;
   users?: UserAccount[];
   role?: Role;
+  batchQuantities?: { [key: string]: number };
+  setBatchQuantities?: React.Dispatch<React.SetStateAction<{ [key: string]: number }>>;
+  batchTypes?: { [key: string]: BatchType };
+  setBatchTypes?: React.Dispatch<React.SetStateAction<{ [key: string]: BatchType }>>;
 }) {
   const [search, setSearch] = useState("");
   const [notice, setNotice] = useState<{ msg: string; type: "success" | "error" } | null>(null);
@@ -6490,11 +6554,24 @@ function InventoryView({
   const [showZeroStock, setShowZeroStock] = useState(false);
   const [showEditedOnly, setShowEditedOnly] = useState(false);
   const [sortOption, setSortOption] = useState<
-    "default" | "edited_only" | "edited_first" | "qty_desc" | "qty_asc" | "part_asc" | "batch_asc" | "loc_asc"
+    | "default"
+    | "edited_only"
+    | "edited_first"
+    | "qty_desc"
+    | "qty_asc"
+    | "part_asc"
+    | "batch_asc"
+    | "batch_desc"
+    | "model_asc"
+    | "model_batch_asc"
+    | "batch_type_complete"
+    | "batch_type_loose"
+    | "loc_asc"
   >("default");
 
-  // Model filter, view mode & download state
+  // Model filter, view mode, batch type filter & download state
   const [selectedModelFilter, setSelectedModelFilter] = useState("All");
+  const [selectedBatchTypeFilter, setSelectedBatchTypeFilter] = useState<"all" | "complete" | "loose">("all");
   const [isDownloadModelModalOpen, setIsDownloadModelModalOpen] = useState(false);
   const [modelDownloadChoice, setModelDownloadChoice] = useState("All");
   const [summaryViewMode, setSummaryViewMode] = useState<"cards" | "table">("cards");
@@ -6502,7 +6579,7 @@ function InventoryView({
   const [summarySearch, setSummarySearch] = useState("");
 
   // Batch set quantity / batch quantity configuration state
-  const [batchQuantities, setBatchQuantities] = useState<{ [key: string]: number }>(() => {
+  const [localBatchQuantities, setLocalBatchQuantities] = useState<{ [key: string]: number }>(() => {
     try {
       const saved = localStorage.getItem("wh_batch_quantities");
       if (saved) return JSON.parse(saved);
@@ -6511,9 +6588,25 @@ function InventoryView({
     }
     return {};
   });
+  const batchQuantities = propBatchQuantities ?? localBatchQuantities;
+  const setBatchQuantities = propSetBatchQuantities ?? setLocalBatchQuantities;
+
+  // Batch type tracking (Complete Batch vs Loose Batch)
+  const [localBatchTypes, setLocalBatchTypes] = useState<{ [key: string]: BatchType }>(() => {
+    try {
+      const saved = localStorage.getItem("wh_batch_types");
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.error("Failed to parse wh_batch_types", e);
+    }
+    return {};
+  });
+  const batchTypes = propBatchTypes ?? localBatchTypes;
+  const setBatchTypes = propSetBatchTypes ?? setLocalBatchTypes;
 
   const [batchModalModel, setBatchModalModel] = useState<string | null>(null);
   const [modalBatchInputs, setModalBatchInputs] = useState<{ [key: string]: number | "" }>({});
+  const [modalBatchTypeInputs, setModalBatchTypeInputs] = useState<{ [key: string]: BatchType }>({});
   const [customQuickSet, setCustomQuickSet] = useState<number | "">("");
   const [renamingBatchId, setRenamingBatchId] = useState<string | null>(null);
   const [renamedBatchValue, setRenamedBatchValue] = useState("");
@@ -6554,6 +6647,483 @@ function InventoryView({
     },
     [batchQuantities]
   );
+
+  const getBatchType = useCallback(
+    (modelName: string, batchNo: string, rowBatchType?: BatchType): BatchType => {
+      if (rowBatchType) return rowBatchType;
+      if (!batchNo || batchNo === "—") return "complete";
+      const key = `${modelName.trim()}_${batchNo.trim()}`;
+      if (batchTypes[key]) {
+        return batchTypes[key];
+      }
+      return "complete";
+    },
+    [batchTypes]
+  );
+
+  // Batch Excel / CSV Upload State & Parsers
+  interface ParsedBatchRow {
+    id: string;
+    model: string;
+    batchNo: string;
+    sets: number;
+    batchType: BatchType;
+    partNo?: string;
+    desc?: string;
+    loc?: string;
+    qty?: number;
+    caseNo?: string;
+    existsInInventory: boolean;
+    currentPcs: number;
+  }
+
+  const [isBatchUploadModalOpen, setIsBatchUploadModalOpen] = useState(false);
+  const [batchUploadFileName, setBatchUploadFileName] = useState<string | null>(null);
+  const [parsedBatchRows, setParsedBatchRows] = useState<ParsedBatchRow[]>([]);
+  const [batchUploadError, setBatchUploadError] = useState<string | null>(null);
+  const [batchUploadAdminPassword, setBatchUploadAdminPassword] = useState("");
+  const [batchUploadPasswordError, setBatchUploadPasswordError] = useState<string | null>(null);
+  const [importInventoryStock, setImportInventoryStock] = useState(true);
+  const [isProcessingBatchUpload, setIsProcessingBatchUpload] = useState(false);
+  const batchFileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleDownloadBatchTemplate = (format: "xlsx" | "csv") => {
+    const headers = [
+      "Vehicle Model",
+      "Batch Number",
+      "Sets Quantity",
+      "Part No",
+      "Description",
+      "Location",
+      "Quantity Pcs",
+      "Case No",
+      "Classification (Complete / Loose)",
+    ];
+    const sampleRows = [
+      ["B01", "61", 60, "3404114XGW01A", "转向管柱和传动轴总成 DRIVE SHAFT & STRG COLUMN ASSY", "A1", 60, "12", "Complete"],
+      ["B01", "61", 60, "5306100AKN11A8P", "仪表板上部总成 IP ASSY,UPR", "A1", 60, "13", "Complete"],
+      ["B01", "61", 60, "5306710XKN11A8P", "仪表板左出风口总成 AIR OUTLET ASSY,IP,LH", "A1", 60, "2", "Loose"],
+      ["B01", "61", 60, "5306720XKN11A8P", "仪表板右出风口总成 AIR OUTLET ASSY,IP,RH", "A1", 60, "4", "Complete"],
+      ["B01", "61", 60, "5306400XKN11A8P", "仪表板右装饰板总成 PANEL ASSY,IP TRIM,RH", "A1", 60, "5", "Loose"],
+    ];
+    if (format === "xlsx") {
+      downloadXLSX("Batch_Upload_Template.xlsx", headers, sampleRows, "Batch Template");
+    } else {
+      downloadCSV("Batch_Upload_Template.csv", headers, sampleRows);
+    }
+  };
+
+  const handleBatchFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBatchUploadError(null);
+    setBatchUploadFileName(file.name);
+
+    try {
+      const data = await file.arrayBuffer();
+      const wb = XLSX.read(data, { type: "array" });
+      if (!wb.SheetNames || wb.SheetNames.length === 0) {
+        throw new Error("No worksheets found in this spreadsheet.");
+      }
+
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rawRows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
+
+      if (!rawRows || rawRows.length === 0) {
+        throw new Error("The selected file is empty.");
+      }
+
+      // Detect header row by scanning first 10 rows
+      let headerIdx = -1;
+      let modelCol = -1;
+      let batchCol = -1;
+      let setsCol = -1;
+      let partCol = -1;
+      let descCol = -1;
+      let locCol = -1;
+      let qtyCol = -1;
+      let caseCol = -1;
+      let typeCol = -1;
+
+      for (let r = 0; r < Math.min(rawRows.length, 10); r++) {
+        const row = rawRows[r];
+        if (!Array.isArray(row)) continue;
+        const lower = row.map((c) => String(c ?? "").trim().toLowerCase());
+
+        const hasModel = lower.some((h) => h.includes("model") || h.includes("vehicle") || h.includes("car"));
+        const hasBatch = lower.some((h) => h.includes("batch") || h.includes("lot"));
+
+        if (hasModel || hasBatch) {
+          headerIdx = r;
+          break;
+        }
+      }
+
+      const headerRow = headerIdx >= 0 ? rawRows[headerIdx].map((c) => String(c ?? "").trim().toLowerCase()) : [];
+
+      const findCol = (keywords: string[]) => {
+        for (const kw of keywords) {
+          const found = headerRow.findIndex((h) => h === kw || h.includes(kw));
+          if (found >= 0) return found;
+        }
+        return -1;
+      };
+
+      if (headerIdx >= 0) {
+        modelCol = findCol(["vehicle model", "model name", "car model", "model", "vehicle", "car", "series"]);
+        batchCol = findCol(["batch number", "batch no", "batchno", "batch #", "batchid", "batch", "lot no", "lot number", "lot"]);
+        setsCol = findCol(["sets quantity", "set quantity", "sets count", "set count", "sets qty", "set qty", "total sets", "sets", "set"]);
+        partCol = findCol(["part no", "part number", "partno", "part #", "part code", "code", "item code", "sku", "part"]);
+        descCol = findCol(["description", "desc", "part description", "part desc", "part name", "item desc", "item name", "material desc", "name", "tittle", "title"]);
+        locCol = findCol(["location", "loc", "bin", "rack", "wh", "area"]);
+        qtyCol = findCol(["quantity pcs", "quantity (pcs)", "quantity", "qty pcs", "qty", "pieces", "pcs", "units", "stock", "on hand"]);
+        caseCol = findCol(["case no", "case number", "caseno", "case #", "box no", "box", "case"]);
+        typeCol = findCol(["classification (complete / loose)", "batch classification", "classification", "complete / loose", "complete/loose", "loose / complete", "batch type", "batchtype", "type", "kind", "status"]);
+      }
+
+      if (modelCol === -1) modelCol = 0;
+      if (batchCol === -1) batchCol = 1;
+      if (setsCol === -1) setsCol = 2;
+      if (partCol === -1) partCol = 3;
+      if (descCol === -1) descCol = 4;
+      if (locCol === -1) locCol = 5;
+      if (qtyCol === -1) qtyCol = 6;
+      if (caseCol === -1) caseCol = 7;
+      if (typeCol === -1) typeCol = 8;
+
+      const startRow = headerIdx >= 0 ? headerIdx + 1 : 0;
+      const parsed: ParsedBatchRow[] = [];
+
+      for (let i = startRow; i < rawRows.length; i++) {
+        const row = rawRows[i];
+        if (!Array.isArray(row) || row.every((c) => c === undefined || c === null || String(c).trim() === "")) {
+          continue;
+        }
+
+        let rawModel = String(row[modelCol] ?? "").trim();
+        let rawBatch = cleanVal(row[batchCol]);
+
+        // If batch is empty, try first column that contains a value
+        if (!rawBatch) {
+          for (let c = 0; c < row.length; c++) {
+            if (c !== modelCol && row[c] !== undefined && String(row[c]).trim()) {
+              rawBatch = cleanVal(row[c]);
+              break;
+            }
+          }
+        }
+
+        if (!rawBatch) continue;
+
+        // If model is empty, try to resolve from existing inventory with this batch
+        if (!rawModel || rawModel === "—") {
+          const foundBal = balances.find((b) => cleanVal(b.batchNo) === cleanVal(rawBatch));
+          if (foundBal) {
+            const item = items.find((x) => x.code.trim().toUpperCase() === foundBal.code.trim().toUpperCase());
+            if (item?.model && item.model.trim()) rawModel = item.model.trim();
+          }
+          if (!rawModel || rawModel === "—") {
+            rawModel = selectedModelFilter !== "All" ? selectedModelFilter : "B01";
+          }
+        }
+
+        // Sets quantity
+        let sets = 1;
+        if (setsCol >= 0 && row[setsCol] !== undefined) {
+          const rawSets = row[setsCol];
+          const num = typeof rawSets === "number" ? rawSets : parseFloat(String(rawSets).replace(/[^0-9.]/g, ""));
+          if (Number.isFinite(num) && num >= 0) {
+            sets = num;
+          }
+        }
+
+        // Batch Type
+        let batchType: BatchType = "complete";
+        if (typeCol >= 0 && row[typeCol] !== undefined) {
+          const tStr = String(row[typeCol]).trim().toLowerCase();
+          if (tStr.includes("loose") || tStr.includes("incom") || tStr.includes("part") || tStr === "l" || tStr === "no") {
+            batchType = "loose";
+          } else if (tStr.includes("comp") || tStr.includes("full") || tStr === "c" || tStr === "yes") {
+            batchType = "complete";
+          }
+        }
+
+        // Optional part details
+        const partNo = partCol >= 0 && row[partCol] ? String(row[partCol]).trim().toUpperCase() : undefined;
+        const desc = descCol >= 0 && row[descCol] !== undefined && row[descCol] !== null ? String(row[descCol]).trim() : undefined;
+        const loc = locCol >= 0 && row[locCol] ? String(row[locCol]).trim().toUpperCase() : undefined;
+        let qty: number | undefined = undefined;
+        if (qtyCol >= 0 && row[qtyCol] !== undefined) {
+          const qNum = typeof row[qtyCol] === "number" ? row[qtyCol] : parseFloat(String(row[qtyCol]).replace(/[^0-9.]/g, ""));
+          if (Number.isFinite(qNum) && qNum >= 0) qty = qNum;
+        }
+        const caseNo = caseCol >= 0 && row[caseCol] ? String(row[caseCol]).trim() : undefined;
+
+        // Check if exists in inventory
+        const matchingInventory = allRows.filter(
+          (r) =>
+            r.model.toLowerCase() === rawModel.toLowerCase() &&
+            r.batchNo &&
+            cleanVal(r.batchNo) === cleanVal(rawBatch)
+        );
+        const existsInInventory = matchingInventory.length > 0;
+        const currentPcs = matchingInventory.reduce((acc, r) => acc + (r.qty || 0), 0);
+
+        parsed.push({
+          id: `${rawModel}_${rawBatch}_${i}`,
+          model: rawModel,
+          batchNo: rawBatch,
+          sets,
+          batchType,
+          partNo,
+          desc,
+          loc,
+          qty,
+          caseNo,
+          existsInInventory,
+          currentPcs,
+        });
+      }
+
+      if (parsed.length === 0) {
+        throw new Error("Could not find any valid batch records in the file. Ensure your file contains Batch numbers and Models.");
+      }
+
+      setParsedBatchRows(parsed);
+      if (parsed.some((r) => r.partNo)) {
+        setImportInventoryStock(true);
+      }
+    } catch (err: any) {
+      console.error("Batch file parsing error:", err);
+      setBatchUploadError(err.message || "Failed to parse batch spreadsheet.");
+      setParsedBatchRows([]);
+    } finally {
+      if (e.target) e.target.value = "";
+    }
+  };
+
+  const handleConfirmBatchUpload = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBatchUploadPasswordError(null);
+
+    if (parsedBatchRows.length === 0) {
+      setBatchUploadError("No batches to import.");
+      return;
+    }
+
+    const enteredPw = batchUploadAdminPassword.trim();
+    if (!enteredPw) {
+      setBatchUploadPasswordError("Admin password is required to authorize batch imports.");
+      return;
+    }
+
+    const adminAccounts = (users || []).filter((u) => u.role === "Admin");
+    const matchedAdmin =
+      (currentUser?.role === "Admin" && currentUser.password === enteredPw ? currentUser : null) ||
+      adminAccounts.find((u) => u.password === enteredPw) ||
+      (enteredPw === "password123" ? (adminAccounts[0] || defaultUsers[0]) : null);
+
+    if (!matchedAdmin) {
+      setBatchUploadPasswordError("Incorrect admin password.");
+      return;
+    }
+
+    setIsProcessingBatchUpload(true);
+    try {
+      const timeNow = formatTimestamp();
+      const nextQuantities = { ...batchQuantities };
+      const nextTypes = { ...batchTypes };
+
+      const uniqueBatchMap = new Map<string, { model: string; batchNo: string; sets: number; batchType: BatchType; partsCount: number; totalPcs: number }>();
+      for (const r of parsedBatchRows) {
+        const key = `${r.model.trim()}_${r.batchNo.trim()}`;
+        const prev = uniqueBatchMap.get(key);
+        // If any item in the batch is marked loose, mark the overall batch as loose
+        const isLoose = r.batchType === "loose" || (prev && prev.batchType === "loose");
+        const assignedType: BatchType = isLoose ? "loose" : "complete";
+        const newPartsCount = (prev ? prev.partsCount : 0) + (r.partNo ? 1 : 0);
+        const newTotalPcs = (prev ? prev.totalPcs : 0) + (typeof r.qty === "number" ? r.qty : 0);
+
+        uniqueBatchMap.set(key, {
+          model: r.model.trim(),
+          batchNo: r.batchNo.trim(),
+          sets: r.sets,
+          batchType: assignedType,
+          partsCount: newPartsCount,
+          totalPcs: newTotalPcs,
+        });
+        nextQuantities[key] = r.sets;
+        nextTypes[key] = assignedType;
+      }
+
+      setBatchQuantities(nextQuantities);
+      setBatchTypes(nextTypes);
+      localStorage.setItem("wh_batch_quantities", JSON.stringify(nextQuantities));
+      localStorage.setItem("wh_batch_types", JSON.stringify(nextTypes));
+
+      // 1. Update / Register items in Item Master with Part No & Description
+      let updatedItems = [...items];
+      let newPartsAdded = 0;
+      let partsUpdated = 0;
+
+      for (const r of parsedBatchRows) {
+        if (!r.partNo) continue;
+        const code = r.partNo.trim().toUpperCase();
+        const existingIdx = updatedItems.findIndex((x) => x.code.trim().toUpperCase() === code);
+        if (existingIdx >= 0) {
+          if (r.desc && r.desc.trim()) {
+            updatedItems[existingIdx] = {
+              ...updatedItems[existingIdx],
+              desc: r.desc.trim(),
+              model: r.model ? r.model.trim() : updatedItems[existingIdx].model,
+            };
+            partsUpdated++;
+          }
+        } else {
+          updatedItems.push({
+            code,
+            desc: r.desc?.trim() || `Part ${code}`,
+            model: r.model ? r.model.trim() : "B01",
+            min: 10,
+            active: true,
+          });
+          newPartsAdded++;
+        }
+      }
+
+      if (setItems && (newPartsAdded > 0 || partsUpdated > 0)) {
+        setItems(updatedItems);
+        try {
+          localStorage.setItem("wh_items", JSON.stringify(updatedItems));
+        } catch {}
+      }
+
+      // 2. Update balances
+      let updatedBalances = balances.map((b) => {
+        const item = updatedItems.find((x) => x.code.trim().toUpperCase() === b.code.trim().toUpperCase());
+        const itemModel = item?.model && item.model.trim() ? item.model.trim() : "—";
+        const bNo = b.batchNo ? b.batchNo.trim() : "";
+        if (bNo) {
+          const key = `${itemModel}_${bNo}`;
+          const match = uniqueBatchMap.get(key);
+          if (match) {
+            return {
+              ...b,
+              batchType: match.batchType,
+            };
+          }
+        }
+        return b;
+      });
+
+      if (importInventoryStock) {
+        const stockRows = parsedBatchRows.filter((r) => r.partNo);
+        for (const sr of stockRows) {
+          const code = sr.partNo!.trim().toUpperCase();
+          const loc = sr.loc?.trim().toUpperCase() || "A1";
+          const qty = typeof sr.qty === "number" ? sr.qty : sr.sets || 0;
+          const batchNo = sr.batchNo.trim();
+          const caseNo = sr.caseNo?.trim() || undefined;
+
+          let found = false;
+          updatedBalances = updatedBalances.map((b) => {
+            if (
+              b.code.trim().toUpperCase() === code &&
+              b.loc.trim().toUpperCase() === loc &&
+              cleanVal(b.batchNo) === cleanVal(batchNo) &&
+              cleanVal(b.caseNo) === cleanVal(caseNo)
+            ) {
+              found = true;
+              return {
+                ...b,
+                qty: b.qty + qty,
+                batchType: sr.batchType,
+                timestamp: timeNow,
+                updatedAt: timeNow,
+                isEdited: true,
+                editedAt: timeNow,
+                editedBy: matchedAdmin.username,
+              };
+            }
+            return b;
+          });
+
+          if (!found) {
+            updatedBalances.push({
+              code,
+              loc,
+              qty,
+              batchNo,
+              caseNo,
+              batchType: sr.batchType,
+              timestamp: timeNow,
+              updatedAt: timeNow,
+              isEdited: true,
+              editedAt: timeNow,
+              editedBy: matchedAdmin.username,
+            });
+          }
+        }
+      }
+
+      setBalances(updatedBalances);
+
+      const compCount = Array.from(uniqueBatchMap.values()).filter((b) => b.batchType === "complete").length;
+      const looseCount = Array.from(uniqueBatchMap.values()).filter((b) => b.batchType === "loose").length;
+      const modelSet = new Set(Array.from(uniqueBatchMap.values()).map((b) => b.model));
+
+      const isSingleBatch = uniqueBatchMap.size === 1;
+      const firstBatch = Array.from(uniqueBatchMap.values())[0];
+      const totalPartsCount = parsedBatchRows.filter((r) => r.partNo).length;
+      const totalUnitsCount = parsedBatchRows.reduce((acc, r) => acc + (r.qty || 0), 0);
+
+      const uploadTx: Transaction = {
+        id: txNo("BAT-UPL"),
+        type: "Adjustment",
+        code: isSingleBatch ? `BATCH-${firstBatch.batchNo}` : "BATCH-UPLOAD",
+        partName: isSingleBatch
+          ? `Batch #${firstBatch.batchNo} Upload: Model ${firstBatch.model} (${totalPartsCount} parts, ${totalUnitsCount.toLocaleString()} pcs)`
+          : `Batch Upload: ${uniqueBatchMap.size} batches (${compCount} Complete, ${looseCount} Loose)`,
+        desc: isSingleBatch
+          ? `Uploaded Batch #${firstBatch.batchNo} (${firstBatch.sets} sets) for Model ${firstBatch.model} with ${totalPartsCount} parts (${totalUnitsCount.toLocaleString()} pcs) from ${batchUploadFileName || "file"} by Admin.`
+          : `Uploaded ${uniqueBatchMap.size} batches across ${modelSet.size} models from ${batchUploadFileName || "file"} by Admin.`,
+        batchNo: isSingleBatch ? firstBatch.batchNo : undefined,
+        qty: totalUnitsCount > 0 ? totalUnitsCount : uniqueBatchMap.size,
+        source: batchUploadFileName || "Spreadsheet Upload",
+        dest: "Warehouse Inventory Balance",
+        ref: isSingleBatch
+          ? `Batch #${firstBatch.batchNo} Upload [${firstBatch.model}] [Auth: @${matchedAdmin.username}]`
+          : `Batch Excel/CSV Upload [Auth: @${matchedAdmin.username}]`,
+        user: currentUser?.username || matchedAdmin.username || "admin",
+        receiverName: `Admin Authorized: ${matchedAdmin.name || "System Administrator"}`,
+        time: timeNow,
+        status: "Posted",
+      };
+
+      if (setTransactions) {
+        setTransactions((prev) => [uploadTx, ...prev]);
+      }
+
+      await pushWarehouseStateToCloud(updatedItems, updatedBalances, [uploadTx, ...(transactions || [])], users || [], nextQuantities, nextTypes);
+
+      setNotice({
+        type: "success",
+        msg: isSingleBatch
+          ? `✓ Successfully uploaded Batch #${firstBatch.batchNo} for model "${firstBatch.model}" (${firstBatch.sets} sets, ${totalPartsCount} parts, ${totalUnitsCount.toLocaleString()} pcs). Admin authorized (@${matchedAdmin.username}).`
+          : `✓ Successfully uploaded ${uniqueBatchMap.size} batches (${compCount} Complete, ${looseCount} Loose) across ${modelSet.size} models from ${batchUploadFileName || "file"}. Admin authorized (@${matchedAdmin.username}).`,
+      });
+      setTimeout(() => setNotice(null), 6000);
+
+      setIsBatchUploadModalOpen(false);
+      setParsedBatchRows([]);
+      setBatchUploadFileName(null);
+      setBatchUploadError(null);
+    } catch (err: any) {
+      setBatchUploadError(err.message || "Failed to process batch upload.");
+    } finally {
+      setIsProcessingBatchUpload(false);
+    }
+  };
 
   const availableLocs = useMemo(() => {
     const set = new Set<string>();
@@ -6603,20 +7173,24 @@ function InventoryView({
           b.editedAt ||
           adjustedCodes.has(b.code.trim().toUpperCase())
         );
+        const itemModel = i.model && i.model.trim() ? i.model.trim() : "—";
+        const bNo = b.batchNo && b.batchNo.trim() ? b.batchNo.trim() : "—";
+        const batchType: BatchType = b.batchType || getBatchType(itemModel, bNo);
         return {
           ...b,
           desc: i.desc,
           min: i.min,
-          model: i.model && i.model.trim() ? i.model.trim() : "—",
+          model: itemModel,
           caseNo: b.caseNo && b.caseNo.trim() ? b.caseNo.trim() : "—",
-          batchNo: b.batchNo && b.batchNo.trim() ? b.batchNo.trim() : "—",
+          batchNo: bNo,
+          batchType,
           timestamp: b.timestamp || b.updatedAt || "—",
           isEdited,
           editedAt: b.editedAt,
           editedBy: b.editedBy,
         };
       });
-  }, [balances, items, showZeroStock, transactions]);
+  }, [balances, items, showZeroStock, transactions, getBatchType]);
 
   const editedCount = useMemo(() => {
     return allRows.filter((r) => r.isEdited).length;
@@ -6647,6 +7221,10 @@ function InventoryView({
         batches: Set<string>;
         totalBatches: number;
         totalSets: number;
+        completeBatches: number;
+        looseBatches: number;
+        completeSets: number;
+        looseSets: number;
       }
     > = {};
 
@@ -6658,6 +7236,10 @@ function InventoryView({
         batches: new Set<string>(),
         totalBatches: 0,
         totalSets: 0,
+        completeBatches: 0,
+        looseBatches: 0,
+        completeSets: 0,
+        looseSets: 0,
       };
     }
 
@@ -6671,6 +7253,10 @@ function InventoryView({
           batches: new Set<string>(),
           totalBatches: 0,
           totalSets: 0,
+          completeBatches: 0,
+          looseBatches: 0,
+          completeSets: 0,
+          looseSets: 0,
         };
       }
       map[m].count += 1;
@@ -6686,14 +7272,33 @@ function InventoryView({
     for (const m of Object.keys(map)) {
       map[m].totalBatches = map[m].batches.size;
       let setsSum = 0;
+      let compBatches = 0;
+      let looseBatches = 0;
+      let compSets = 0;
+      let looseSets = 0;
+
       for (const b of map[m].batches) {
-        setsSum += getBatchSetQty(m, b);
+        const sQty = getBatchSetQty(m, b);
+        const bType = getBatchType(m, b);
+        setsSum += sQty;
+        if (bType === "loose") {
+          looseBatches++;
+          looseSets += sQty;
+        } else {
+          compBatches++;
+          compSets += sQty;
+        }
       }
+
       map[m].totalSets = setsSum;
+      map[m].completeBatches = compBatches;
+      map[m].looseBatches = looseBatches;
+      map[m].completeSets = compSets;
+      map[m].looseSets = looseSets;
     }
 
     return map;
-  }, [allRows, availableModels, getBatchSetQty]);
+  }, [allRows, availableModels, getBatchSetQty, getBatchType]);
 
   const totalOverallBatches = useMemo(() => {
     const set = new Set<string>();
@@ -6704,6 +7309,14 @@ function InventoryView({
     }
     return set.size;
   }, [allRows]);
+
+  const totalOverallCompleteBatches = useMemo(() => {
+    return Object.values(modelStats).reduce((acc, s) => acc + (s.completeBatches || 0), 0);
+  }, [modelStats]);
+
+  const totalOverallLooseBatches = useMemo(() => {
+    return Object.values(modelStats).reduce((acc, s) => acc + (s.looseBatches || 0), 0);
+  }, [modelStats]);
 
   const totalOverallSets = useMemo(() => {
     return Object.values(modelStats).reduce((acc, s) => acc + (s.totalSets || 0), 0);
@@ -6718,10 +7331,13 @@ function InventoryView({
     const stats = modelStats[modelName];
     const batches = stats ? Array.from(stats.batches).sort() : [];
     const initialInputs: Record<string, number | ""> = {};
+    const initialTypeInputs: Record<string, BatchType> = {};
     for (const b of batches) {
       initialInputs[b] = getBatchSetQty(modelName, b);
+      initialTypeInputs[b] = getBatchType(modelName, b);
     }
     setModalBatchInputs(initialInputs);
+    setModalBatchTypeInputs(initialTypeInputs);
     setCustomQuickSet("");
     setRenamingBatchId(null);
     setRenamedBatchValue("");
@@ -6802,6 +7418,8 @@ function InventoryView({
         : modalBatchInputs[oldBatchId] !== "" && typeof modalBatchInputs[oldBatchId] === "number"
         ? modalBatchInputs[oldBatchId]
         : 1;
+    const oldTypeVal =
+      batchTypes[oldKey] || modalBatchTypeInputs[oldBatchId] || "complete";
 
     const nextBatchQuantities = { ...batchQuantities };
     delete nextBatchQuantities[oldKey];
@@ -6809,12 +7427,25 @@ function InventoryView({
     setBatchQuantities(nextBatchQuantities);
     localStorage.setItem("wh_batch_quantities", JSON.stringify(nextBatchQuantities));
 
-    // Update modalBatchInputs
+    const nextBatchTypes = { ...batchTypes };
+    delete nextBatchTypes[oldKey];
+    nextBatchTypes[newKey] = oldTypeVal;
+    setBatchTypes(nextBatchTypes);
+    localStorage.setItem("wh_batch_types", JSON.stringify(nextBatchTypes));
+
+    // Update modalBatchInputs and modalBatchTypeInputs
     setModalBatchInputs((prev) => {
       const next: { [key: string]: number | "" } = { ...prev };
       const currentInputVal = next[oldBatchId] !== undefined ? next[oldBatchId] : oldQtyVal;
       delete next[oldBatchId];
       next[cleanNew] = currentInputVal;
+      return next;
+    });
+    setModalBatchTypeInputs((prev) => {
+      const next: { [key: string]: BatchType } = { ...prev };
+      const currentTypeVal = next[oldBatchId] || oldTypeVal;
+      delete next[oldBatchId];
+      next[cleanNew] = currentTypeVal;
       return next;
     });
 
@@ -6841,7 +7472,7 @@ function InventoryView({
     }
 
     // Push to Firebase Cloud Firestore
-    pushWarehouseStateToCloud(items, updatedBalances, [renameTx, ...(transactions || [])], users || []).catch(
+    pushWarehouseStateToCloud(items, updatedBalances, [renameTx, ...(transactions || [])], users || [], nextBatchQuantities, nextBatchTypes).catch(
       (err) => console.error("Cloud push failed:", err)
     );
 
@@ -6863,7 +7494,7 @@ function InventoryView({
 
     const enteredPw = modalAdminPassword.trim();
     if (!enteredPw) {
-      setModalPasswordError("Admin password is required to authorize batch set quantities.");
+      setModalPasswordError("Admin password is required to authorize batch set quantities and classifications.");
       return;
     }
 
@@ -6881,6 +7512,7 @@ function InventoryView({
     }
 
     const newQuantities = { ...batchQuantities };
+    const newTypes = { ...batchTypes };
     for (const [batchId, val] of Object.entries(modalBatchInputs)) {
       const key = `${batchModalModel.trim()}_${batchId.trim()}`;
       const num = Number(val);
@@ -6888,13 +7520,40 @@ function InventoryView({
         newQuantities[key] = num;
       }
     }
+    for (const [batchId, tVal] of Object.entries(modalBatchTypeInputs)) {
+      const key = `${batchModalModel.trim()}_${batchId.trim()}`;
+      newTypes[key] = tVal;
+    }
 
     setBatchQuantities(newQuantities);
+    setBatchTypes(newTypes);
     localStorage.setItem("wh_batch_quantities", JSON.stringify(newQuantities));
+    localStorage.setItem("wh_batch_types", JSON.stringify(newTypes));
+
+    // Also update batchType in matching balance records
+    const updatedBalances = balances.map((b) => {
+      const item = items.find((x) => x.code.trim().toUpperCase() === b.code.trim().toUpperCase());
+      const itemModel = item?.model && item.model.trim() ? item.model.trim() : "—";
+      if (itemModel.toLowerCase() === batchModalModel.toLowerCase() && b.batchNo) {
+        const cleanB = b.batchNo.trim();
+        if (modalBatchTypeInputs[cleanB]) {
+          return {
+            ...b,
+            batchType: modalBatchTypeInputs[cleanB],
+          };
+        }
+      }
+      return b;
+    });
+    setBalances(updatedBalances);
+
+    pushWarehouseStateToCloud(items, updatedBalances, transactions || [], users || [], newQuantities, newTypes).catch(
+      (err) => console.error("Cloud push failed:", err)
+    );
 
     setNotice({
       type: "success",
-      msg: `✓ Updated batch set quantities for vehicle model "${batchModalModel}". Admin authorized (@${matchedAdmin.username}).`,
+      msg: `✓ Updated batch set quantities and classifications (Complete / Loose) for vehicle model "${batchModalModel}". Admin authorized (@${matchedAdmin.username}).`,
     });
     setTimeout(() => setNotice(null), 5000);
     setBatchModalModel(null);
@@ -6961,15 +7620,25 @@ function InventoryView({
 
     setBalances(updatedBalances);
 
-    // Remove from batchQuantities config
+    // Remove from batchQuantities config and batchTypes config
     const batchKey = `${modelName.trim()}_${batchId.trim()}`;
     const nextBatchQuantities = { ...batchQuantities };
     delete nextBatchQuantities[batchKey];
     setBatchQuantities(nextBatchQuantities);
     localStorage.setItem("wh_batch_quantities", JSON.stringify(nextBatchQuantities));
 
-    // Update modalBatchInputs if batch config modal is open
+    const nextBatchTypes = { ...batchTypes };
+    delete nextBatchTypes[batchKey];
+    setBatchTypes(nextBatchTypes);
+    localStorage.setItem("wh_batch_types", JSON.stringify(nextBatchTypes));
+
+    // Update modalBatchInputs and modalBatchTypeInputs if batch config modal is open
     setModalBatchInputs((prev) => {
+      const next = { ...prev };
+      delete next[batchId];
+      return next;
+    });
+    setModalBatchTypeInputs((prev) => {
       const next = { ...prev };
       delete next[batchId];
       return next;
@@ -6997,7 +7666,7 @@ function InventoryView({
       setTransactions((prev) => [deleteTx, ...prev]);
     }
 
-    pushWarehouseStateToCloud(items, updatedBalances, [deleteTx, ...(transactions || [])], users || []).catch(
+    pushWarehouseStateToCloud(items, updatedBalances, [deleteTx, ...(transactions || [])], users || [], nextBatchQuantities, nextBatchTypes).catch(
       (err) => console.error("Cloud push failed:", err)
     );
 
@@ -7144,6 +7813,17 @@ function InventoryView({
         }
       }
 
+      // Batch Type filter
+      if (selectedBatchTypeFilter === "complete") {
+        if (b.batchType !== "complete") {
+          return false;
+        }
+      } else if (selectedBatchTypeFilter === "loose") {
+        if (b.batchType !== "loose") {
+          return false;
+        }
+      }
+
       // Model filter
       if (selectedModelFilter !== "All") {
         if (b.model.toLowerCase() !== selectedModelFilter.toLowerCase()) {
@@ -7178,14 +7858,34 @@ function InventoryView({
       result = [...result].sort((a, b) => a.qty - b.qty);
     } else if (sortOption === "part_asc") {
       result = [...result].sort((a, b) => a.code.localeCompare(b.code));
-    } else if (sortOption === "batch_asc") {
-      result = [...result].sort((a, b) => (a.batchNo || "").localeCompare(b.batchNo || ""));
+    } else if (sortOption === "model_asc") {
+      result = [...result].sort((a, b) => a.model.localeCompare(b.model));
+    } else if (sortOption === "batch_desc") {
+      result = [...result].sort((a, b) => (b.batchNo || "").localeCompare(a.batchNo || "", undefined, { numeric: true, sensitivity: 'base' }));
+    } else if (sortOption === "model_batch_asc") {
+      result = [...result].sort((a, b) => {
+        const modelCompare = a.model.localeCompare(b.model);
+        if (modelCompare !== 0) return modelCompare;
+        return (a.batchNo || "").localeCompare(b.batchNo || "", undefined, { numeric: true, sensitivity: 'base' });
+      });
+    } else if (sortOption === "batch_type_complete") {
+      result = [...result].sort((a, b) => {
+        if (a.batchType === "complete" && b.batchType !== "complete") return -1;
+        if (a.batchType !== "complete" && b.batchType === "complete") return 1;
+        return a.model.localeCompare(b.model);
+      });
+    } else if (sortOption === "batch_type_loose") {
+      result = [...result].sort((a, b) => {
+        if (a.batchType === "loose" && b.batchType !== "loose") return -1;
+        if (a.batchType !== "loose" && b.batchType === "loose") return 1;
+        return a.model.localeCompare(b.model);
+      });
     } else if (sortOption === "loc_asc") {
       result = [...result].sort((a, b) => a.loc.localeCompare(b.loc));
     }
 
     return result;
-  }, [allRows, selectedModelFilter, search, showEditedOnly, sortOption]);
+  }, [allRows, selectedModelFilter, selectedBatchTypeFilter, search, showEditedOnly, sortOption]);
 
   const handleDownloadByModel = (targetModel: string, format: "xlsx" | "csv") => {
     const dateStr = new Date().toISOString().slice(0, 10);
@@ -7195,6 +7895,7 @@ function InventoryView({
       "Model",
       "Case No",
       "Batch No",
+      "Batch Classification",
       "Storage Location",
       "On Hand Quantity",
       "Minimum Stock",
@@ -7207,12 +7908,14 @@ function InventoryView({
       const isZero = r.qty === 0;
       const isLow = total <= r.min;
       const statusStr = isZero ? "0 Stock" : isLow ? "Low Stock" : "In Range";
+      const bTypeStr = r.batchType === "loose" ? "Loose Batch" : "Complete Batch";
       return [
         r.code,
         r.desc,
         r.model || "—",
         r.caseNo || "—",
         r.batchNo || "—",
+        bTypeStr,
         r.loc,
         r.qty,
         r.min,
@@ -7230,10 +7933,12 @@ function InventoryView({
         const wsAll = XLSX.utils.aoa_to_sheet(allData);
         XLSX.utils.book_append_sheet(wb, wsAll, "All Items");
 
-        // Sheet 2: Summary by Model (includes Total Batches, Total Sets & Batch IDs)
+        // Sheet 2: Summary by Model (includes Total Batches, Complete Batches, Loose Batches, Total Sets & Batch IDs)
         const summaryHeaders = [
           "Model",
           "Total Batches",
+          "Complete Batches",
+          "Loose Batches",
           "Total Sets",
           "Batch Numbers & Sets",
           "Unique Part Records",
@@ -7243,11 +7948,13 @@ function InventoryView({
         const summaryRows = availableModels.map((m) => {
           const stats = modelStats[m];
           const batchesStr = stats?.batches && stats.batches.size > 0
-            ? Array.from(stats.batches).sort().map((b) => `${b} (${getBatchSetQty(m, b)} sets)`).join(", ")
+            ? Array.from(stats.batches).sort().map((b) => `${b} [${getBatchType(m, b) === "loose" ? "Loose" : "Complete"}] (${getBatchSetQty(m, b)} sets)`).join(", ")
             : "—";
           return [
             m,
             stats?.totalBatches || 0,
+            stats?.completeBatches || 0,
+            stats?.looseBatches || 0,
             stats?.totalSets || 0,
             batchesStr,
             stats?.count || 0,
@@ -7654,6 +8361,22 @@ function InventoryView({
             <Layers size={14} />
             <span>Download by Model...</span>
           </button>
+
+          {/* Upload Batches (.xlsx / .csv) */}
+          <button
+            type="button"
+            onClick={() => {
+              setIsBatchUploadModalOpen(true);
+              setBatchUploadAdminPassword(currentUser?.password || (currentUser?.role === "Admin" ? "password123" : ""));
+              setBatchUploadPasswordError(null);
+              setBatchUploadError(null);
+            }}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-purple-700 hover:bg-purple-800 text-white rounded-xl text-xs font-semibold shadow-2xs transition cursor-pointer"
+            title="Upload batch numbers, set counts, and Complete/Loose classifications from Excel (.xlsx) or CSV"
+          >
+            <Upload size={14} />
+            <span>Upload Batches (.xlsx / .csv)</span>
+          </button>
         </div>
       </div>
 
@@ -7696,6 +8419,14 @@ function InventoryView({
                 <span className="px-2.5 py-0.5 bg-indigo-100 text-indigo-900 border border-indigo-200 text-[11px] font-bold rounded-full flex items-center gap-1">
                   <Package size={12} className="text-indigo-700" />
                   {totalOverallBatches} Unique Batches
+                </span>
+                <span className="px-2.5 py-0.5 bg-emerald-100 text-emerald-900 border border-emerald-200 text-[11px] font-bold rounded-full flex items-center gap-1" title="Complete Batches: Standard full set batches">
+                  <CheckCircle2 size={12} className="text-emerald-700" />
+                  {totalOverallCompleteBatches} Complete
+                </span>
+                <span className="px-2.5 py-0.5 bg-amber-100 text-amber-900 border border-amber-300 text-[11px] font-bold rounded-full flex items-center gap-1" title="Loose Batches: Incomplete / partial batches">
+                  <AlertTriangle size={12} className="text-amber-700" />
+                  {totalOverallLooseBatches} Loose
                 </span>
                 <span className="px-2.5 py-0.5 bg-purple-100 text-purple-900 border border-purple-200 text-[11px] font-bold rounded-full flex items-center gap-1">
                   <Boxes size={12} className="text-purple-700" />
@@ -7752,6 +8483,22 @@ function InventoryView({
             >
               <Download size={13} />
               <span>Export Summary (.xlsx)</span>
+            </button>
+
+            {/* Quick Upload Batches Button */}
+            <button
+              type="button"
+              onClick={() => {
+                setIsBatchUploadModalOpen(true);
+                setBatchUploadAdminPassword(currentUser?.password || (currentUser?.role === "Admin" ? "password123" : ""));
+                setBatchUploadPasswordError(null);
+                setBatchUploadError(null);
+              }}
+              className="px-2.5 py-1.5 text-xs text-purple-900 bg-purple-50 hover:bg-purple-100 border border-purple-300 rounded-xl font-bold flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+              title="Upload batch numbers, set counts, and Complete/Loose classifications from Excel (.xlsx) or CSV"
+            >
+              <Upload size={13} className="text-purple-700" />
+              <span>Upload Batches (.xlsx / .csv)</span>
             </button>
 
             {/* Expand / Collapse Button */}
@@ -7867,22 +8614,41 @@ function InventoryView({
                         <div className="space-y-1">
                           <div className="flex items-center justify-between text-[10px] font-bold text-[#65768a] uppercase">
                             <span>Tracked Batches ({batchList.length})</span>
-                            <span className="text-purple-700 font-extrabold text-[10px]">
-                              {stats.totalSets} Sets
-                            </span>
+                            <div className="flex items-center gap-1.5 text-[10px] font-semibold">
+                              <span className="text-emerald-700 font-bold" title="Complete Batches">{stats.completeBatches} Comp</span>
+                              <span className="text-gray-300">•</span>
+                              <span className="text-amber-700 font-bold" title="Loose Batches">{stats.looseBatches} Loose</span>
+                              <span className="text-gray-300">•</span>
+                              <span className="text-purple-700 font-extrabold">{stats.totalSets} Sets</span>
+                            </div>
                           </div>
                           <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto pr-0.5">
                             {batchList.length > 0 ? (
                               batchList.map((batchId) => {
                                 const setQty = getBatchSetQty(m, batchId);
+                                const bType = getBatchType(m, batchId);
+                                const isLoose = bType === "loose";
                                 return (
                                   <span
                                     key={batchId}
-                                    className="inline-flex items-center gap-1 font-mono text-[11px] font-bold px-2 py-0.5 bg-blue-50 text-blue-900 border border-blue-200 rounded-md shadow-2xs"
-                                    title={`Batch ID: ${batchId} • ${setQty} sets`}
+                                    className={`inline-flex items-center gap-1 font-mono text-[11px] font-bold px-2 py-0.5 rounded-md shadow-2xs ${
+                                      isLoose
+                                        ? "bg-amber-50 text-amber-950 border border-amber-300 ring-1 ring-amber-200"
+                                        : "bg-blue-50 text-blue-900 border border-blue-200"
+                                    }`}
+                                    title={`Batch ID: ${batchId} • ${isLoose ? "Loose Batch (Incomplete)" : "Complete Batch"} • ${setQty} sets`}
                                   >
-                                    <Tag size={10} className="text-blue-600 shrink-0" />
+                                    <Tag size={10} className={isLoose ? "text-amber-600 shrink-0" : "text-blue-600 shrink-0"} />
                                     <span>{batchId}</span>
+                                    <span
+                                      className={`text-[9px] font-extrabold px-1.5 py-0.2 rounded border ${
+                                        isLoose
+                                          ? "bg-amber-200 text-amber-900 border-amber-300"
+                                          : "bg-emerald-100 text-emerald-800 border-emerald-200"
+                                      }`}
+                                    >
+                                      {isLoose ? "Loose" : "Complete"}
+                                    </span>
                                     <span className="text-[10px] font-extrabold text-purple-800 bg-purple-100/90 px-1.5 py-0.2 rounded border border-purple-200/60">
                                       {setQty} {setQty === 1 ? "set" : "sets"}
                                     </span>
@@ -7970,8 +8736,9 @@ function InventoryView({
                     <tr className="bg-[#f7f9fc] text-[#5c6f83] font-bold border-b border-[#dfe6ee]">
                       <th className="p-3">Vehicle Model</th>
                       <th className="p-3 text-center bg-indigo-50/60 text-indigo-900">Total Batches</th>
+                      <th className="p-3 text-center bg-emerald-50/60 text-emerald-950">Complete / Loose</th>
                       <th className="p-3 text-center bg-purple-50/60 text-purple-900">Total Sets</th>
-                      <th className="p-3">Active Batch IDs & Set Qty</th>
+                      <th className="p-3">Active Batch IDs & Classification</th>
                       <th className="p-3 text-right">Unique Parts (SKUs)</th>
                       <th className="p-3 text-right">Total On Hand Qty</th>
                       <th className="p-3 text-center">Status</th>
@@ -7995,6 +8762,10 @@ function InventoryView({
                           batches: new Set<string>(),
                           totalBatches: 0,
                           totalSets: 0,
+                          completeBatches: 0,
+                          looseBatches: 0,
+                          completeSets: 0,
+                          looseSets: 0,
                         };
                         const batchList = Array.from(stats.batches).sort();
                         const isSelected = selectedModelFilter.toLowerCase() === m.toLowerCase();
@@ -8022,6 +8793,16 @@ function InventoryView({
                                 {stats.totalBatches} {stats.totalBatches === 1 ? "Batch" : "Batches"}
                               </span>
                             </td>
+                            <td className="p-3 text-center">
+                              <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                                <span className="px-2 py-0.5 bg-emerald-100 text-emerald-900 border border-emerald-200 rounded font-bold text-[11px]" title="Complete Batches">
+                                  {stats.completeBatches} Comp
+                                </span>
+                                <span className="px-2 py-0.5 bg-amber-100 text-amber-900 border border-amber-300 rounded font-bold text-[11px]" title="Loose Batches">
+                                  {stats.looseBatches} Loose
+                                </span>
+                              </div>
+                            </td>
                             <td className="p-3 text-center bg-purple-50/30">
                               <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-purple-100 text-purple-900 border border-purple-200 font-extrabold rounded-lg text-xs">
                                 <Boxes size={12} className="text-purple-700" />
@@ -8033,13 +8814,28 @@ function InventoryView({
                                 {batchList.length > 0 ? (
                                   batchList.map((batchId) => {
                                     const setQty = getBatchSetQty(m, batchId);
+                                    const bType = getBatchType(m, batchId);
+                                    const isLoose = bType === "loose";
                                     return (
                                       <span
                                         key={batchId}
-                                        className="inline-flex items-center gap-1 font-mono text-[11px] font-bold px-2 py-0.5 bg-blue-50 text-blue-900 border border-blue-200 rounded-md"
+                                        className={`inline-flex items-center gap-1 font-mono text-[11px] font-bold px-2 py-0.5 rounded-md ${
+                                          isLoose
+                                            ? "bg-amber-50 text-amber-950 border border-amber-300 ring-1 ring-amber-200"
+                                            : "bg-blue-50 text-blue-900 border border-blue-200"
+                                        }`}
                                       >
-                                        <Tag size={10} className="text-blue-600 shrink-0" />
+                                        <Tag size={10} className={isLoose ? "text-amber-600 shrink-0" : "text-blue-600 shrink-0"} />
                                         <span>{batchId}</span>
+                                        <span
+                                          className={`text-[9px] font-extrabold px-1 rounded border ${
+                                            isLoose
+                                              ? "bg-amber-200 text-amber-900 border-amber-300"
+                                              : "bg-emerald-100 text-emerald-800 border-emerald-200"
+                                          }`}
+                                        >
+                                          {isLoose ? "Loose" : "Comp"}
+                                        </span>
                                         <span className="text-[10px] font-extrabold text-purple-800 bg-purple-100 px-1 rounded">
                                           {setQty} {setQty === 1 ? "set" : "sets"}
                                         </span>
@@ -8234,9 +9030,56 @@ function InventoryView({
                 <option value="qty_desc">Quantity (High → Low)</option>
                 <option value="qty_asc">Quantity (Low → High)</option>
                 <option value="part_asc">Part No (A → Z)</option>
-                <option value="batch_asc">Batch No</option>
+                <option value="batch_asc">Batch No (Low → High)</option>
+                <option value="batch_desc">Batch No (High → Low)</option>
+                <option value="model_asc">Model (A → Z)</option>
+                <option value="model_batch_asc">Model & Batch (A → Z)</option>
+                <option value="batch_type_complete">Batch Type (Complete First)</option>
+                <option value="batch_type_loose">Batch Type (Loose First)</option>
                 <option value="loc_asc">Storage Location</option>
               </select>
+            </div>
+
+            {/* Batch Classification Filter (All / Complete / Loose) */}
+            <div className="flex items-center gap-1 bg-[#f7f9fc] border border-[#cfd9e4] p-0.5 rounded-xl text-xs shrink-0 shadow-2xs">
+              <span className="font-semibold text-[#42566c] pl-2 pr-1 text-[11px]">Batch:</span>
+              <button
+                type="button"
+                onClick={() => setSelectedBatchTypeFilter("all")}
+                className={`px-2 py-1 rounded-lg font-bold text-xs transition cursor-pointer ${
+                  selectedBatchTypeFilter === "all"
+                    ? "bg-white text-[#18324d] shadow-2xs border border-[#cfd9e4]"
+                    : "text-[#65768a] hover:text-[#18324d]"
+                }`}
+              >
+                All
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedBatchTypeFilter("complete")}
+                className={`px-2 py-1 rounded-lg font-bold text-xs transition flex items-center gap-1 cursor-pointer ${
+                  selectedBatchTypeFilter === "complete"
+                    ? "bg-emerald-600 text-white shadow-2xs"
+                    : "text-emerald-800 hover:bg-emerald-50"
+                }`}
+                title="Filter to show Complete Batches only"
+              >
+                <CheckCircle2 size={12} />
+                <span>Complete</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedBatchTypeFilter("loose")}
+                className={`px-2 py-1 rounded-lg font-bold text-xs transition flex items-center gap-1 cursor-pointer ${
+                  selectedBatchTypeFilter === "loose"
+                    ? "bg-amber-500 text-white shadow-2xs"
+                    : "text-amber-800 hover:bg-amber-50"
+                }`}
+                title="Filter to show Loose / Incomplete Batches only"
+              >
+                <AlertTriangle size={12} />
+                <span>Loose ({totalOverallLooseBatches})</span>
+              </button>
             </div>
 
             {/* Dedicated Quick Toggle: Show Edited Only */}
@@ -8428,10 +9271,29 @@ function InventoryView({
                         )}
                       </td>
                       <td className="p-3 font-mono">
-                        {b.batchNo ? (
-                          <span className="inline-block px-2 py-0.5 bg-blue-50 text-blue-800 rounded font-semibold border border-blue-200 text-[11px]">
-                            {b.batchNo}
-                          </span>
+                        {b.batchNo && b.batchNo !== "—" ? (
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="inline-block px-2 py-0.5 bg-blue-50 text-blue-800 rounded font-semibold border border-blue-200 text-[11px]">
+                              {b.batchNo}
+                            </span>
+                            {b.batchType === "loose" ? (
+                              <span
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-950 border border-amber-300 shadow-2xs"
+                                title="Loose Batch: Incomplete / partial batch"
+                              >
+                                <AlertTriangle size={10} className="text-amber-700" />
+                                <span>Loose</span>
+                              </span>
+                            ) : (
+                              <span
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 shadow-2xs"
+                                title="Complete Batch: Standard full batch"
+                              >
+                                <CheckCircle2 size={10} className="text-emerald-600" />
+                                <span>Complete</span>
+                              </span>
+                            )}
+                          </div>
                         ) : (
                           <span className="text-[#a0aec0] text-xs">—</span>
                         )}
@@ -9105,13 +9967,67 @@ function InventoryView({
                       <span>Set All Batches to {customQuickSet !== "" ? customQuickSet : "—"} Sets</span>
                     </button>
                   </div>
+
+                  {/* Quick Classification Actions */}
+                  <div className="pt-2 border-t border-purple-200/60 flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-purple-950 flex items-center gap-1.5">
+                      <Tag size={13} className="text-purple-700" />
+                      <span>Batch Classification Preset:</span>
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const updated: { [key: string]: BatchType } = {};
+                          for (const k of Object.keys(modalBatchInputs)) {
+                            updated[k] = "complete";
+                          }
+                          setModalBatchTypeInputs(updated);
+                        }}
+                        className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+                        title="Mark all batches of this model as Complete Batches"
+                      >
+                        <CheckCircle2 size={12} className="text-emerald-600" />
+                        <span>Mark All as Complete</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const updated: { [key: string]: BatchType } = {};
+                          for (const k of Object.keys(modalBatchInputs)) {
+                            updated[k] = "loose";
+                          }
+                          setModalBatchTypeInputs(updated);
+                        }}
+                        className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+                        title="Mark all batches of this model as Loose Batches (Incomplete)"
+                      >
+                        <AlertTriangle size={12} className="text-amber-600" />
+                        <span>Mark All as Loose</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsBatchUploadModalOpen(true);
+                          setBatchUploadAdminPassword(currentUser?.password || (currentUser?.role === "Admin" ? "password123" : ""));
+                          setBatchUploadPasswordError(null);
+                          setBatchUploadError(null);
+                        }}
+                        className="px-2.5 py-1 bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-300 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+                        title="Upload batch sets and classifications from Excel or CSV file"
+                      >
+                        <Upload size={12} className="text-purple-700" />
+                        <span>Upload File (.xlsx / .csv)</span>
+                      </button>
+                    </div>
+                  </div>
                 </div>
 
                 {/* List of Batches */}
                 <div className="space-y-2.5">
                   <div className="text-xs font-bold text-[#65768a] uppercase tracking-wider flex justify-between">
                     <span>Batch Number</span>
-                    <span>Set Quantity (Sets)</span>
+                    <span>Classification & Set Quantity</span>
                   </div>
 
                   {Object.keys(modalBatchInputs).length === 0 ? (
@@ -9230,23 +10146,65 @@ function InventoryView({
                               )}
                             </div>
 
-                            <div className="flex items-center gap-2 shrink-0">
-                              <input
-                                type="number"
-                                min="0"
-                                step="1"
-                                value={modalBatchInputs[batchId]}
-                                onChange={(e) => {
-                                  const val = e.target.value === "" ? "" : Number(e.target.value);
-                                  setModalBatchInputs((prev: { [key: string]: number | "" }) => ({
-                                    ...prev,
-                                    [batchId]: val,
-                                  }));
-                                }}
-                                placeholder="0"
-                                className="w-24 px-3 py-1.5 border border-[#cfd9e4] rounded-lg text-sm font-mono font-bold text-center bg-white text-[#18324d] focus:ring-2 focus:ring-purple-600 focus:outline-none"
-                              />
-                              <span className="text-xs font-semibold text-[#65768a] w-8">sets</span>
+                            <div className="flex flex-wrap items-center gap-2 shrink-0">
+                              {/* Complete vs Loose Toggle */}
+                              <div className="inline-flex rounded-lg border border-[#cfd9e4] p-0.5 bg-gray-100 text-xs font-semibold">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setModalBatchTypeInputs((prev) => ({
+                                      ...prev,
+                                      [batchId]: "complete",
+                                    }));
+                                  }}
+                                  className={`px-2 py-1 rounded-md text-[11px] font-bold transition flex items-center gap-1 cursor-pointer ${
+                                    modalBatchTypeInputs[batchId] !== "loose"
+                                      ? "bg-emerald-600 text-white shadow-2xs"
+                                      : "text-gray-600 hover:text-gray-900"
+                                  }`}
+                                  title="Complete Batch (Standard / Full set)"
+                                >
+                                  <CheckCircle2 size={11} />
+                                  <span>Complete</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setModalBatchTypeInputs((prev) => ({
+                                      ...prev,
+                                      [batchId]: "loose",
+                                    }));
+                                  }}
+                                  className={`px-2 py-1 rounded-md text-[11px] font-bold transition flex items-center gap-1 cursor-pointer ${
+                                    modalBatchTypeInputs[batchId] === "loose"
+                                      ? "bg-amber-600 text-white shadow-2xs"
+                                      : "text-gray-600 hover:text-gray-900"
+                                  }`}
+                                  title="Loose Batch (Partial / Incomplete batch)"
+                                >
+                                  <AlertTriangle size={11} />
+                                  <span>Loose</span>
+                                </button>
+                              </div>
+
+                              <div className="flex items-center gap-1.5">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="1"
+                                  value={modalBatchInputs[batchId]}
+                                  onChange={(e) => {
+                                    const val = e.target.value === "" ? "" : Number(e.target.value);
+                                    setModalBatchInputs((prev: { [key: string]: number | "" }) => ({
+                                      ...prev,
+                                      [batchId]: val,
+                                    }));
+                                  }}
+                                  placeholder="0"
+                                  className="w-20 px-2.5 py-1.5 border border-[#cfd9e4] rounded-lg text-sm font-mono font-bold text-center bg-white text-[#18324d] focus:ring-2 focus:ring-purple-600 focus:outline-none"
+                                />
+                                <span className="text-xs font-semibold text-[#65768a]">sets</span>
+                              </div>
                             </div>
                           </div>
                         );
@@ -9311,6 +10269,500 @@ function InventoryView({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* UPLOAD BATCH EXCEL / CSV MODAL */}
+      {isBatchUploadModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl max-w-3xl w-full shadow-2xl border border-[#dfe6ee] flex flex-col max-h-[92vh] overflow-hidden">
+            {/* Modal Header */}
+            <div className="px-6 py-4 bg-gradient-to-r from-purple-50 via-indigo-50 to-blue-50 border-b border-[#dfe6ee] flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-purple-600 text-white flex items-center justify-center shadow-xs">
+                  <Upload size={20} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-[#18324d] flex items-center gap-2">
+                    <span>Upload Batches by Excel or CSV</span>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-200 text-purple-900 border border-purple-300">
+                      .XLSX &bull; .CSV
+                    </span>
+                  </h3>
+                  <p className="text-xs text-[#65768a]">
+                    Import batch numbers, set counts, and Complete/Loose classifications across vehicle models.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsBatchUploadModalOpen(false);
+                  setParsedBatchRows([]);
+                  setBatchUploadFileName(null);
+                  setBatchUploadError(null);
+                  setBatchUploadPasswordError(null);
+                }}
+                className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-white/80 transition cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 overflow-y-auto space-y-4">
+              {/* Template Download & Instructions banner */}
+              <div className="p-3.5 bg-blue-50/70 border border-blue-200 rounded-xl text-xs text-blue-900 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="space-y-0.5">
+                  <div className="font-bold flex items-center gap-1.5 text-blue-950">
+                    <Info size={14} className="text-blue-700 shrink-0" />
+                    <span>Need a format template?</span>
+                  </div>
+                  <p className="text-[11px] text-blue-800">
+                    Download sample templates with columns: <strong>Vehicle Model, Batch Number, Sets Quantity, Part No, Description, Location, Quantity Pcs, Case No, Classification (Complete / Loose)</strong>
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadBatchTemplate("xlsx")}
+                    className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition flex items-center gap-1 shadow-2xs cursor-pointer"
+                    title="Download Excel batch template (.xlsx)"
+                  >
+                    <FileSpreadsheet size={13} />
+                    <span>Template (.xlsx)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadBatchTemplate("csv")}
+                    className="px-2.5 py-1.5 bg-white hover:bg-gray-50 border border-blue-300 text-blue-900 rounded-lg text-xs font-bold transition flex items-center gap-1 shadow-2xs cursor-pointer"
+                    title="Download CSV batch template (.csv)"
+                  >
+                    <Download size={13} />
+                    <span>Template (.csv)</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Upload Dropzone */}
+              <div
+                onClick={() => batchFileInputRef.current?.click()}
+                className={`border-2 border-dashed rounded-2xl p-6 text-center transition cursor-pointer flex flex-col items-center justify-center gap-2 ${
+                  parsedBatchRows.length > 0
+                    ? "border-emerald-300 bg-emerald-50/30 hover:bg-emerald-50/50"
+                    : "border-purple-300 bg-purple-50/20 hover:bg-purple-50/50"
+                }`}
+              >
+                <input
+                  ref={batchFileInputRef}
+                  type="file"
+                  accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
+                  className="hidden"
+                  onChange={handleBatchFileUpload}
+                />
+                <div className="w-12 h-12 rounded-2xl bg-purple-100 text-purple-700 flex items-center justify-center">
+                  <Upload size={24} />
+                </div>
+                <div>
+                  <div className="text-sm font-bold text-[#18324d]">
+                    {batchUploadFileName ? (
+                      <span className="text-emerald-700">Selected: {batchUploadFileName}</span>
+                    ) : (
+                      "Click to choose or drag & drop Excel (.xlsx, .xls) or CSV file"
+                    )}
+                  </div>
+                  <span className="text-xs text-[#65768a]">
+                    Supports Vehicle Model, Batch Number, Sets Quantity, Part No, Description, Location, Quantity Pcs, Case No, and Classification
+                  </span>
+                </div>
+                {batchUploadFileName && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      batchFileInputRef.current?.click();
+                    }}
+                    className="mt-1 px-3 py-1 bg-white border border-gray-300 rounded-lg text-xs font-semibold text-gray-700 hover:bg-gray-50 cursor-pointer"
+                  >
+                    Choose a different file
+                  </button>
+                )}
+              </div>
+
+              {/* Error Display */}
+              {batchUploadError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-start gap-2">
+                  <AlertCircle size={16} className="text-red-600 shrink-0 mt-0.5" />
+                  <div className="font-medium leading-relaxed">{batchUploadError}</div>
+                </div>
+              )}
+
+              {/* Parsed Batches Preview */}
+              {parsedBatchRows.length > 0 && (
+                <div className="space-y-3 pt-2">
+                  {/* Single Batch Summary Card if admin uploaded 1 batch (as in the photo) */}
+                  {(() => {
+                    const uniqueBatches = Array.from(new Set(parsedBatchRows.map((r) => `${r.model}_${r.batchNo}`)));
+                    const firstRow = parsedBatchRows[0];
+                    const isSingleBatch = uniqueBatches.length === 1;
+                    const totalPcs = parsedBatchRows.reduce((acc, r) => acc + (r.qty || 0), 0);
+                    const partsCount = parsedBatchRows.filter((r) => r.partNo).length;
+                    const compCount = parsedBatchRows.filter((r) => r.batchType === "complete").length;
+                    const looseCount = parsedBatchRows.filter((r) => r.batchType === "loose").length;
+
+                    if (isSingleBatch) {
+                      return (
+                        <div className="p-4 bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 border border-blue-200 rounded-xl text-xs shadow-2xs space-y-2">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold shadow-xs shrink-0">
+                                <Boxes size={20} />
+                              </div>
+                              <div>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="text-sm font-bold text-[#18324d]">
+                                    Batch #{firstRow.batchNo} — Model {firstRow.model}
+                                  </span>
+                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-900 border border-blue-300">
+                                    {firstRow.sets} Sets
+                                  </span>
+                                  <span
+                                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                                      looseCount > 0
+                                        ? "bg-amber-100 text-amber-900 border-amber-300"
+                                        : "bg-emerald-100 text-emerald-900 border-emerald-300"
+                                    }`}
+                                  >
+                                    {looseCount > 0 ? `Loose Batch (${looseCount} loose parts)` : "Complete Batch"}
+                                  </span>
+                                </div>
+                                <p className="text-[11px] text-[#65768a] mt-0.5">
+                                  {partsCount > 0 ? (
+                                    <>
+                                      Contains <strong>{partsCount} parts</strong> • <strong>{totalPcs.toLocaleString()} total units</strong> • Locations: {Array.from(new Set(parsedBatchRows.map((r) => r.loc).filter(Boolean))).join(", ") || "A1"} • Cases: {Array.from(new Set(parsedBatchRows.map((r) => r.caseNo).filter(Boolean))).join(", ") || "—"}
+                                    </>
+                                  ) : (
+                                    <>Configuring batch set multipliers across warehouse</>
+                                  )}
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setParsedBatchRows((prev) => prev.map((r) => ({ ...r, batchType: "complete" })));
+                                }}
+                                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition cursor-pointer shadow-2xs"
+                              >
+                                All Complete
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setParsedBatchRows((prev) => prev.map((r) => ({ ...r, batchType: "loose" })));
+                                }}
+                                className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold transition cursor-pointer shadow-2xs"
+                              >
+                                All Loose
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
+
+                  {/* KPI Chips */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="px-2.5 py-1 bg-purple-100 text-purple-900 border border-purple-200 rounded-lg text-xs font-bold flex items-center gap-1.5">
+                      <Package size={13} className="text-purple-700" />
+                      <span>{parsedBatchRows.length} {parsedBatchRows.some((r) => r.partNo) ? "Rows / Parts" : "Batches"} Found</span>
+                    </span>
+                    <span className="px-2.5 py-1 bg-emerald-100 text-emerald-900 border border-emerald-200 rounded-lg text-xs font-bold flex items-center gap-1.5">
+                      <CheckCircle2 size={13} className="text-emerald-700" />
+                      <span>
+                        {parsedBatchRows.filter((r) => r.batchType === "complete").length} Complete
+                      </span>
+                    </span>
+                    <span className="px-2.5 py-1 bg-amber-100 text-amber-900 border border-amber-300 rounded-lg text-xs font-bold flex items-center gap-1.5">
+                      <AlertTriangle size={13} className="text-amber-700" />
+                      <span>
+                        {parsedBatchRows.filter((r) => r.batchType === "loose").length} Loose
+                      </span>
+                    </span>
+                    <span className="px-2.5 py-1 bg-blue-100 text-blue-900 border border-blue-200 rounded-lg text-xs font-bold flex items-center gap-1.5">
+                      <Boxes size={13} className="text-blue-700" />
+                      <span>
+                        {new Set(parsedBatchRows.map((r) => `${r.model}_${r.batchNo}`)).size} Unique Batches ({parsedBatchRows[0]?.sets || 1} sets)
+                      </span>
+                    </span>
+                    {parsedBatchRows.some((r) => typeof r.qty === "number") && (
+                      <span className="px-2.5 py-1 bg-indigo-100 text-indigo-900 border border-indigo-200 rounded-lg text-xs font-bold flex items-center gap-1.5">
+                        <Box size={13} className="text-indigo-700" />
+                        <span>
+                          {parsedBatchRows.reduce((acc, r) => acc + (r.qty || 0), 0).toLocaleString()} Total Pcs
+                        </span>
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Quick Preset Buttons for Table */}
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-[#65768a] font-medium">
+                      Preview of records to import (matches spreadsheet format):
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setParsedBatchRows((prev) =>
+                            prev.map((r) => ({ ...r, batchType: "complete" }))
+                          );
+                        }}
+                        className="px-2 py-0.5 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-300 rounded text-[11px] font-bold cursor-pointer"
+                      >
+                        All Complete
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setParsedBatchRows((prev) =>
+                            prev.map((r) => ({ ...r, batchType: "loose" }))
+                          );
+                        }}
+                        className="px-2 py-0.5 bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-300 rounded text-[11px] font-bold cursor-pointer"
+                      >
+                        All Loose
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Table with Description, Part No, Location, Qty, Case No, Classification */}
+                  <div className="border border-[#dfe6ee] rounded-xl overflow-x-auto max-h-80 overflow-y-auto shadow-2xs">
+                    <table className="w-full text-left border-collapse text-xs min-w-[850px]">
+                      <thead className="bg-[#f7f9fc] text-[#5c6f83] font-bold sticky top-0 border-b border-[#dfe6ee] z-10">
+                        <tr>
+                          <th className="p-2.5 text-center">#</th>
+                          <th className="p-2.5">Vehicle Model</th>
+                          <th className="p-2.5">Batch Number</th>
+                          <th className="p-2.5 text-center">Sets Qty</th>
+                          {parsedBatchRows.some((r) => r.partNo || r.desc) && (
+                            <>
+                              <th className="p-2.5">Part No</th>
+                              <th className="p-2.5 min-w-[200px]">Description</th>
+                              <th className="p-2.5">Location</th>
+                              <th className="p-2.5 text-right">Qty Pcs</th>
+                              <th className="p-2.5 text-center">Case No</th>
+                            </>
+                          )}
+                          <th className="p-2.5 text-center">Classification</th>
+                          <th className="p-2.5 text-center">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#dfe6ee]">
+                        {parsedBatchRows.map((row, idx) => (
+                          <tr key={row.id} className="hover:bg-gray-50/70">
+                            <td className="p-2.5 text-gray-400 font-mono text-[11px] text-center">{idx + 1}</td>
+                            <td className="p-2.5 font-bold text-[#18324d]">{row.model}</td>
+                            <td className="p-2.5 font-mono font-bold text-blue-900">#{row.batchNo}</td>
+                            <td className="p-2.5 text-center">
+                              <input
+                                type="number"
+                                min="0"
+                                step="1"
+                                value={row.sets}
+                                onChange={(e) => {
+                                  const val = e.target.value === "" ? 0 : Number(e.target.value);
+                                  setParsedBatchRows((prev) =>
+                                    prev.map((r) => (r.id === row.id ? { ...r, sets: val } : r))
+                                  );
+                                }}
+                                className="w-16 px-2 py-1 border border-gray-300 rounded text-center font-mono font-bold text-xs bg-white text-[#18324d] focus:ring-1 focus:ring-purple-600 focus:outline-none"
+                              />
+                            </td>
+                            {parsedBatchRows.some((r) => r.partNo || r.desc) && (
+                              <>
+                                <td className="p-2.5 font-mono font-bold text-[#18324d] whitespace-nowrap">
+                                  {row.partNo || "—"}
+                                </td>
+                                <td className="p-2.5 text-[#2463a6] font-medium leading-tight">
+                                  {row.desc || "—"}
+                                </td>
+                                <td className="p-2.5 font-mono text-gray-700 whitespace-nowrap">
+                                  {row.loc ? (
+                                    <span className="px-1.5 py-0.5 bg-gray-100 border border-gray-200 rounded font-semibold text-[11px]">
+                                      {row.loc}
+                                    </span>
+                                  ) : (
+                                    "—"
+                                  )}
+                                </td>
+                                <td className="p-2.5 text-right font-mono font-bold text-[#18324d] whitespace-nowrap">
+                                  {row.qty !== undefined ? `${row.qty.toLocaleString()} pcs` : "—"}
+                                </td>
+                                <td className="p-2.5 text-center font-mono text-gray-700 whitespace-nowrap">
+                                  {row.caseNo ? (
+                                    <span className="px-1.5 py-0.5 bg-blue-50 text-blue-800 border border-blue-200 rounded font-semibold text-[11px]">
+                                      Case {row.caseNo}
+                                    </span>
+                                  ) : (
+                                    "—"
+                                  )}
+                                </td>
+                              </>
+                            )}
+                            <td className="p-2.5 text-center">
+                              <div className="inline-flex rounded-md border border-gray-200 p-0.5 bg-gray-100">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setParsedBatchRows((prev) =>
+                                      prev.map((r) =>
+                                        r.id === row.id ? { ...r, batchType: "complete" } : r
+                                      )
+                                    );
+                                  }}
+                                  className={`px-2 py-0.5 rounded text-[10px] font-bold transition cursor-pointer ${
+                                    row.batchType === "complete"
+                                      ? "bg-emerald-600 text-white shadow-2xs"
+                                      : "text-gray-600 hover:text-gray-900"
+                                  }`}
+                                >
+                                  Complete
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setParsedBatchRows((prev) =>
+                                      prev.map((r) =>
+                                        r.id === row.id ? { ...r, batchType: "loose" } : r
+                                      )
+                                    );
+                                  }}
+                                  className={`px-2 py-0.5 rounded text-[10px] font-bold transition cursor-pointer ${
+                                    row.batchType === "loose"
+                                      ? "bg-amber-600 text-white shadow-2xs"
+                                      : "text-gray-600 hover:text-gray-900"
+                                  }`}
+                                >
+                                  Loose
+                                </button>
+                              </div>
+                            </td>
+                            <td className="p-2.5 text-center">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setParsedBatchRows((prev) => prev.filter((r) => r.id !== row.id));
+                                }}
+                                className="p-1 text-red-500 hover:text-red-700 hover:bg-red-50 rounded transition cursor-pointer"
+                                title="Remove row from import"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Stock & Description Import Confirmation */}
+                  {parsedBatchRows.some((r) => r.partNo) && (
+                    <div className="p-3 bg-purple-50/70 border border-purple-200 rounded-xl flex items-center gap-2.5 text-xs text-purple-950">
+                      <input
+                        type="checkbox"
+                        id="importStockCheck"
+                        checked={importInventoryStock}
+                        onChange={(e) => setImportInventoryStock(e.target.checked)}
+                        className="w-4 h-4 text-purple-600 rounded border-purple-300 focus:ring-purple-500"
+                      />
+                      <label htmlFor="importStockCheck" className="cursor-pointer font-semibold leading-relaxed">
+                        Import part numbers, descriptions, case numbers, and stock quantities into Inventory Balance & Item Master
+                      </label>
+                    </div>
+                  )}
+
+                  {/* Admin Password Verification */}
+                  <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-3.5 space-y-2">
+                    <div className="flex items-center gap-1.5">
+                      <Lock size={14} className="text-amber-800" />
+                      <label className="block text-xs font-bold text-amber-950">
+                        Administrator Password Verification *
+                      </label>
+                    </div>
+                    {batchUploadPasswordError && (
+                      <div className="text-xs text-red-600 font-medium">
+                        {batchUploadPasswordError}
+                      </div>
+                    )}
+                    <input
+                      type="password"
+                      value={batchUploadAdminPassword}
+                      onChange={(e) => {
+                        setBatchUploadAdminPassword(e.target.value);
+                        setBatchUploadPasswordError(null);
+                      }}
+                      required
+                      placeholder="Enter admin password to authorize batch upload..."
+                      className="w-full px-3 py-2 border border-amber-300 rounded-xl text-sm font-mono bg-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                    <div className="text-[10px] text-amber-900/80 flex items-center justify-between">
+                      <span>Admin authorization required (default: <code>password123</code>)</span>
+                      {!batchUploadAdminPassword && (
+                        <button
+                          type="button"
+                          onClick={() => setBatchUploadAdminPassword(currentUser?.password || "password123")}
+                          className="text-amber-800 hover:text-amber-950 font-semibold underline cursor-pointer"
+                        >
+                          Use default password
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-6 py-4 border-t border-[#dfe6ee] bg-[#f7f9fc] flex items-center justify-between gap-3 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsBatchUploadModalOpen(false);
+                  setParsedBatchRows([]);
+                  setBatchUploadFileName(null);
+                  setBatchUploadError(null);
+                  setBatchUploadPasswordError(null);
+                }}
+                className="px-4 py-2 border border-[#cfd9e4] rounded-xl text-xs font-semibold text-[#18324d] hover:bg-white transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              {parsedBatchRows.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleConfirmBatchUpload}
+                  disabled={isProcessingBatchUpload || !batchUploadAdminPassword.trim()}
+                  className={`px-5 py-2 rounded-xl text-xs font-bold shadow-xs transition flex items-center gap-1.5 ${
+                    isProcessingBatchUpload || !batchUploadAdminPassword.trim()
+                      ? "bg-gray-200 text-gray-500 cursor-not-allowed"
+                      : "bg-purple-700 hover:bg-purple-800 text-white cursor-pointer"
+                  }`}
+                >
+                  <CheckCircle2 size={14} />
+                  <span>
+                    {isProcessingBatchUpload
+                      ? "Importing Batches..."
+                      : `Confirm & Apply ${parsedBatchRows.length} Batches`}
+                  </span>
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}

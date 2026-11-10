@@ -58,13 +58,15 @@ async function startServer() {
 
   app.post("/api/sync-state", async (req, res) => {
     try {
-      const { items, balances, transactions, users } = req.body;
+      const { items, balances, transactions, users, batchQuantities, batchTypes } = req.body;
       if (Array.isArray(items) && Array.isArray(balances)) {
         inMemoryServerState = {
           items,
           balances,
           transactions: Array.isArray(transactions) ? transactions : [],
           users: Array.isArray(users) ? users : [],
+          batchQuantities: batchQuantities && typeof batchQuantities === "object" ? batchQuantities : {},
+          batchTypes: batchTypes && typeof batchTypes === "object" ? batchTypes : {},
           updatedAt: new Date().toISOString(),
           version: Date.now(),
         };

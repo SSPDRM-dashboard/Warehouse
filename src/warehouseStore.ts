@@ -1,6 +1,6 @@
 import { doc, onSnapshot, setDoc, getDoc, getDocFromServer } from "firebase/firestore";
 import { db, handleFirestoreError, OperationType, testConnection, disableFirestoreNetwork, enableFirestoreNetwork } from "./firebase";
-import { Item, Balance, Transaction, UserAccount } from "./types";
+import { Item, Balance, Transaction, UserAccount, BatchType } from "./types";
 import { seedItems, initialBalances, initialTransactions } from "./mockData";
 import { defaultUsers } from "./defaultUsers";
 
@@ -12,6 +12,8 @@ export interface WarehouseStateData {
   balances: Balance[];
   transactions: Transaction[];
   users: UserAccount[];
+  batchQuantities?: Record<string, number>;
+  batchTypes?: Record<string, BatchType>;
   updatedAt: string;
   sourceDevice?: string;
   version: number;
@@ -137,12 +139,16 @@ export function subscribeToWarehouseState(
     const localBalances = localStorage.getItem("wh_balances");
     const localTransactions = localStorage.getItem("wh_transactions");
     const localUsers = localStorage.getItem("wh_users");
+    const localBatchQuantities = localStorage.getItem("wh_batch_quantities");
+    const localBatchTypes = localStorage.getItem("wh_batch_types");
     if (localItems && localBalances && localTransactions) {
       onData({
         items: JSON.parse(localItems),
         balances: JSON.parse(localBalances),
         transactions: JSON.parse(localTransactions),
         users: localUsers ? JSON.parse(localUsers) : defaultUsers,
+        batchQuantities: localBatchQuantities ? JSON.parse(localBatchQuantities) : {},
+        batchTypes: localBatchTypes ? JSON.parse(localBatchTypes) : {},
         updatedAt: new Date().toISOString(),
         sourceDevice: "Local Storage Mode",
         version: 1,
@@ -173,6 +179,8 @@ export function subscribeToWarehouseState(
             balances: Array.isArray(data.balances) ? data.balances : initialBalances,
             transactions: Array.isArray(data.transactions) ? data.transactions : initialTransactions,
             users: Array.isArray(data.users) && data.users.length ? data.users : defaultUsers,
+            batchQuantities: data.batchQuantities && typeof data.batchQuantities === "object" ? data.batchQuantities : {},
+            batchTypes: data.batchTypes && typeof data.batchTypes === "object" ? data.batchTypes : {},
             updatedAt: data.updatedAt || new Date().toISOString(),
             sourceDevice: data.sourceDevice || "Cloud",
             version: typeof data.version === "number" ? data.version : 1,
@@ -184,6 +192,12 @@ export function subscribeToWarehouseState(
             localStorage.setItem("wh_balances", JSON.stringify(cleanData.balances));
             localStorage.setItem("wh_transactions", JSON.stringify(cleanData.transactions));
             localStorage.setItem("wh_users", JSON.stringify(cleanData.users));
+            if (cleanData.batchQuantities) {
+              localStorage.setItem("wh_batch_quantities", JSON.stringify(cleanData.batchQuantities));
+            }
+            if (cleanData.batchTypes) {
+              localStorage.setItem("wh_batch_types", JSON.stringify(cleanData.batchTypes));
+            }
             setPendingCloudSync(false);
           } catch (e) {
             console.warn("Could not save to localStorage", e);
@@ -198,6 +212,8 @@ export function subscribeToWarehouseState(
             balances: initialBalances,
             transactions: initialTransactions,
             users: defaultUsers,
+            batchQuantities: {},
+            batchTypes: {},
             updatedAt: new Date().toISOString(),
             sourceDevice: getDeviceInfo(),
             version: 1,
@@ -267,14 +283,34 @@ export async function pushWarehouseStateToCloud(
   items: Item[],
   balances: Balance[],
   transactions: Transaction[],
-  users: UserAccount[]
+  users: UserAccount[],
+  batchQuantities?: Record<string, number>,
+  batchTypes?: Record<string, BatchType>
 ): Promise<{ success: boolean; isQuota?: boolean; error?: string }> {
+  // Read current batch config from storage if not provided
+  let bQty = batchQuantities;
+  let bTyp = batchTypes;
+  if (!bQty) {
+    try {
+      const saved = localStorage.getItem("wh_batch_quantities");
+      if (saved) bQty = JSON.parse(saved);
+    } catch {}
+  }
+  if (!bTyp) {
+    try {
+      const saved = localStorage.getItem("wh_batch_types");
+      if (saved) bTyp = JSON.parse(saved);
+    } catch {}
+  }
+
   // Always save to localStorage first so local operations are never blocked
   try {
     localStorage.setItem("wh_items", JSON.stringify(items));
     localStorage.setItem("wh_balances", JSON.stringify(balances));
     localStorage.setItem("wh_transactions", JSON.stringify(transactions));
     localStorage.setItem("wh_users", JSON.stringify(users));
+    if (bQty) localStorage.setItem("wh_batch_quantities", JSON.stringify(bQty));
+    if (bTyp) localStorage.setItem("wh_batch_types", JSON.stringify(bTyp));
     localStorage.setItem(LOCAL_MODIFIED_KEY, Date.now().toString());
   } catch {
     // ignore quota issues
@@ -285,7 +321,7 @@ export async function pushWarehouseStateToCloud(
     fetch("/api/sync-state", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items, balances, transactions, users }),
+      body: JSON.stringify({ items, balances, transactions, users, batchQuantities: bQty || {}, batchTypes: bTyp || {} }),
     }).catch(() => {});
   } catch {}
 
@@ -295,6 +331,8 @@ export async function pushWarehouseStateToCloud(
     balances,
     transactions,
     users,
+    batchQuantities: bQty || {},
+    batchTypes: bTyp || {},
     updatedAt: new Date().toISOString(),
     sourceDevice: getDeviceInfo(),
     version: Date.now(),
@@ -333,6 +371,8 @@ export async function retryPendingCloudSync(): Promise<{ success: boolean; messa
     const rawBalances = localStorage.getItem("wh_balances");
     const rawTransactions = localStorage.getItem("wh_transactions");
     const rawUsers = localStorage.getItem("wh_users");
+    const rawBatchQuantities = localStorage.getItem("wh_batch_quantities");
+    const rawBatchTypes = localStorage.getItem("wh_batch_types");
 
     if (!rawItems || !rawBalances || !rawTransactions) {
       return { success: false, message: "No local warehouse data found to sync." };
@@ -342,6 +382,8 @@ export async function retryPendingCloudSync(): Promise<{ success: boolean; messa
     const balances = JSON.parse(rawBalances);
     const transactions = JSON.parse(rawTransactions);
     const users = rawUsers ? JSON.parse(rawUsers) : defaultUsers;
+    const batchQuantities = rawBatchQuantities ? JSON.parse(rawBatchQuantities) : {};
+    const batchTypes = rawBatchTypes ? JSON.parse(rawBatchTypes) : {};
 
     const docRef = doc(db, STATE_COLLECTION, STATE_DOC);
     const payload: WarehouseStateData = {
@@ -349,6 +391,8 @@ export async function retryPendingCloudSync(): Promise<{ success: boolean; messa
       balances,
       transactions,
       users,
+      batchQuantities,
+      batchTypes,
       updatedAt: new Date().toISOString(),
       sourceDevice: getDeviceInfo() + " (Manual Retry)",
       version: Date.now(),
@@ -424,6 +468,8 @@ export async function pullLatestFromCloud(): Promise<WarehouseStateData> {
     balances: Array.isArray(data.balances) ? data.balances : initialBalances,
     transactions: Array.isArray(data.transactions) ? data.transactions : initialTransactions,
     users: Array.isArray(data.users) && data.users.length ? data.users : defaultUsers,
+    batchQuantities: data.batchQuantities && typeof data.batchQuantities === "object" ? data.batchQuantities : {},
+    batchTypes: data.batchTypes && typeof data.batchTypes === "object" ? data.batchTypes : {},
     updatedAt: data.updatedAt || new Date().toISOString(),
     sourceDevice: data.sourceDevice || "Cloud",
     version: typeof data.version === "number" ? data.version : Date.now(),
@@ -434,6 +480,12 @@ export async function pullLatestFromCloud(): Promise<WarehouseStateData> {
     localStorage.setItem("wh_balances", JSON.stringify(cleanData.balances));
     localStorage.setItem("wh_transactions", JSON.stringify(cleanData.transactions));
     localStorage.setItem("wh_users", JSON.stringify(cleanData.users));
+    if (cleanData.batchQuantities) {
+      localStorage.setItem("wh_batch_quantities", JSON.stringify(cleanData.batchQuantities));
+    }
+    if (cleanData.batchTypes) {
+      localStorage.setItem("wh_batch_types", JSON.stringify(cleanData.batchTypes));
+    }
     setPendingCloudSync(false);
     setFirestoreQuotaExceeded(false);
   } catch (e) {

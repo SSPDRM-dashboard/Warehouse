@@ -50,7 +50,6 @@ export type RolePermissions = Record<Role, Page[]>;
 export const DEFAULT_ROLE_PERMISSIONS: RolePermissions = {
   Admin: [
     "dashboard",
-    "items",
     "receiving",
     "unpack",
     "kitting_case",
@@ -58,6 +57,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissions = {
     "return",
     "send_to_va",
     "inventory",
+    "items",
     "history",
     "reports",
     "ai_forecast",
@@ -103,7 +103,6 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissions = {
   ],
   Manager: [
     "dashboard",
-    "items",
     "receiving",
     "unpack",
     "kitting_case",
@@ -111,18 +110,19 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissions = {
     "return",
     "send_to_va",
     "inventory",
+    "items",
     "history",
     "reports",
     "ai_forecast",
   ],
   User: [
     "dashboard",
-    "items",
     "receiving",
     "unpack",
     "kitting_case",
     "send_to_va",
     "inventory",
+    "items",
   ],
 };
 
@@ -143,11 +143,14 @@ export interface Item {
   active: boolean;
 }
 
+export type BatchType = "complete" | "loose";
+
 export interface Balance {
   code: string; // Part No
   loc: string;
   qty: number;
   batchNo?: string; // Batch No
+  batchType?: BatchType; // "complete" (full batch) | "loose" (incomplete batch)
   caseNo?: string; // Case No / Packing Case ID
   timestamp?: string; // Last updated timestamp
   updatedAt?: string; // Timestamp
